@@ -149,6 +149,7 @@ class XBeeController:
         if hasattr(xbee_message, 'remote_device') and xbee_message.remote_device:
             try:
                 remote_address_64bit = xbee_message.remote_device.get_64bit_addr().address.hex() 
+                print(f"Paket geldi: Boyut={len(data)}")
             except Exception as e:
                 print(f"Uyarı: Uzak cihaz adres bilgisi alınamadı (geri çağırma içinde): {e}")
                 pass
@@ -180,6 +181,7 @@ class XBeeController:
     def _do_send(self, package: XBeePackage, remote_xbee_addr_hex: str = None):
         """Paket gönderme işlemini gerçekleştirir."""
         data_to_send = bytes(package)
+        print(f"Paket gönderildi: boyut={len(data_to_send)}")
         
         # Maksimum payload 65 byte.
         if len(data_to_send) > 65: 
