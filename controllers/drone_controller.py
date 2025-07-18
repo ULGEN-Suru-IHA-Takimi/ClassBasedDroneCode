@@ -24,6 +24,26 @@ class DroneController(XBeeController):
             (47.398106, 8.543560, None, 90),   # Waypoint 2
             (47.397106, 8.544060, None, 180),  # Waypoint 3
         ]
+        # Mesaj sağlayıcı fonksiyonunu ayarla
+        self.set_message_provider(self._drone_message_provider)
+        self._mission_running = False  # Görev başlatılmadan False
+
+    def _drone_message_provider(self):
+        """
+        XBee ile gönderilecek gerçek drone verisini döndürür.
+        Örneğin en güncel GPS verisi veya başka bir telemetri.
+        """
+        try:
+            if hasattr(self, 'drone'):
+                if self.flying_alt:
+                    lat, lon, alt, heading = self.waypoints[-1]
+                    return self.get_gps(lat, lon, self.flying_alt)
+                else:
+                    return self.get_gps()
+            else:
+                return self.get_gps()
+        except Exception as e:
+            return f"ERROR: {e}"
 
     async def connect(self):
         await self.drone.connect(system_address=self.system_address)
@@ -121,14 +141,37 @@ class DroneController(XBeeController):
     async def run(self):
         await self.connect()
         await self.wait_for_global_position()
-        await self.arm_and_takeoff()
-        # XBee cihazını ve thread'leri burada başlat
         self.device.open()
         self.device.add_data_received_callback(self.data_receive_callback)
         sender_thread = threading.Thread(target=self.send_data_periodically, daemon=True)
         sender_thread.start()
         cleaner_thread = threading.Thread(target=self.queue_cleaner, daemon=True)
         cleaner_thread.start()
+        print("Ground Control'dan 'start_mission' komutu bekleniyor...")
+        while not self._mission_running:
+            await asyncio.sleep(1)
+        # Görev başlatıldıktan sonra ana loopta başka bir şey yapılmaz
+
+    def data_receive_callback(self, xbee_message):
+        try:
+            data = xbee_message.data.decode('utf-8')
+            fields = data.split(',')
+            print(f"📩 Gelen mesaj: {fields}")
+            if len(fields) >= 2 and fields[1].strip() == "start_mission":
+                if not self._mission_running:
+                    self._mission_running = True
+                    print("🚩 XBee'den start_mission komutu alındı, görevi başlatıyor!")
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.mission_sequence())
+            # ...mevcut sinyal kuyruğu işlemleri...
+        except Exception as e:
+            print(f"📩 Gelen mesaj (ham): {xbee_message.data} (Hata: {e})")
+            fields = xbee_message.data
+        with self.queue_lock:
+            self.signal_queue.append((time.time(), 'IN', fields))
+
+    async def mission_sequence(self):
+        await self.arm_and_takeoff()
         await self.fly_waypoints()
         await self.land()
         await self.stay_connected()    

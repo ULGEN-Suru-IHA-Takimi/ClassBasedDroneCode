@@ -19,8 +19,14 @@ class XBeeController:
 
     # Gönderilecek mesaj (kısa, virgül ile ayrılmış string)
  
+    def get_waypoints(self, waypoints=None):
+        if waypoints is None:
+            waypoints = self.waypoints
+        prefix = f"{self.drone_id}," if self.drone_id else ""
+        wp_str = ','.join([f"{lat*1000000},{lon*1000000},{alt or 0},{heading}" for lat, lon, alt, heading in waypoints])
+        return f"{prefix}waypoints,{wp_str}"
 
-    def get_command(self, command = "takeoff"):
+    def get_command(self, command="takeoff"):
         prefix = f"{self.drone_id}," if self.drone_id else ""
         cmd = f"{prefix}{command}"
         return self._truncate_message(cmd)
@@ -53,6 +59,21 @@ class XBeeController:
             fields = xbee_message.data
         with self.queue_lock:
             self.signal_queue.append((time.time(), 'IN', fields))
+
+    def set_message_provider(self, provider_func):
+        """
+        Dışarıdan bir fonksiyon ile gönderilecek mesajı sağlayıcıyı ayarla.
+        provider_func: parametresiz fonksiyon, string döndürmeli.
+        """
+        self._message_provider = provider_func
+
+    def get_message(self):
+        """
+        Mesaj sağlayıcı fonksiyon varsa onu kullan, yoksa default GPS verisi gönder.
+        """
+        if hasattr(self, '_message_provider') and callable(self._message_provider):
+            return self._message_provider()
+        return self.get_gps()
 
     def send_data_periodically(self):
         if self.remote_node_id:
@@ -100,6 +121,54 @@ class XBeeController:
                 if direction == 'OUT':
                     return data
         return None
+
+    def send_waypoints(self, waypoints=None, max_packet_size=65*1024, sender_id=None):
+        """
+        Waypoint listesini XBee üzerinden paket paket gönderir.
+        Her paketin başında gönderenin kimliği (sender_id) prefix olarak eklenir.
+        """
+        if waypoints is None:
+            waypoints = getattr(self, 'waypoints', [])
+        if sender_id is None:
+            sender_id = self.drone_id or "UNKNOWN"
+        prefix = f"{sender_id},waypoints,"  # Her paketin başında kimlik ve tip
+        # Her waypoint'i ayrı paketle
+        for idx, (lat, lon, alt, heading) in enumerate(waypoints):
+            wp_str = f"{lat*1000000},{lon*1000000},{alt or 0},{heading}"
+            msg = f"{prefix}{idx},{wp_str}"
+            msg = self._truncate_message(msg)
+            if self.device.is_open():
+                if self.remote_device_cache:
+                    self.device.send_data(self.remote_device_cache, msg)
+                    print(f"✅ Waypoint {idx} gönderildi. ({len(msg.encode('utf-8'))} bayt)")
+                else:
+                    self.device.send_data_broadcast(msg)
+                    print(f"📡 Broadcast ile waypoint {idx} gönderildi. ({len(msg.encode('utf-8'))} bayt)")
+                with self.queue_lock:
+                    self.signal_queue.append((time.time(), 'OUT', msg))
+            else:
+                print(f"⚠️ XBee cihazı açık değil, waypoint {idx} gönderilemedi.")
+
+    def send_command(self, command, sender_id=None):
+        """
+        Komutu XBee üzerinden gönderir. Başında gönderenin kimliği (sender_id) prefix olarak eklenir.
+        """
+        if sender_id is None:
+            sender_id = self.drone_id or "UNKNOWN"
+        prefix = f"{sender_id},"
+        msg = prefix + self.get_command(command)
+        msg = self._truncate_message(msg)
+        if self.device.is_open():
+            if self.remote_device_cache:
+                self.device.send_data(self.remote_device_cache, msg)
+                print(f"✅ Komut gönderildi: {command} ({len(msg.encode('utf-8'))} bayt)")
+            else:
+                self.device.send_data_broadcast(msg)
+                print(f"📡 Broadcast ile komut gönderildi: {command} ({len(msg.encode('utf-8'))} bayt)")
+            with self.queue_lock:
+                self.signal_queue.append((time.time(), 'OUT', msg))
+        else:
+            print("⚠️ XBee cihazı açık değil, komut gönderilemedi.")
 
     def run(self):
         try:
