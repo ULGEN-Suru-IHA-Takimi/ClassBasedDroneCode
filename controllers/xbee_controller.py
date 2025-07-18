@@ -36,20 +36,20 @@ class XBeePackage:
         encoded_data = json_data.encode('utf-8')
         # Paket boyutu uyarısı send_package metodunda daha detaylı ele alınacak.
         return encoded_data
-    
+
     def __str__(self):
         return f"Type:{self.package_type}, Sender:{self.sender}, Params:{self.params}"
-            
+
     @classmethod
     def from_bytes(cls, byte_data):
         """Bayt dizisinden XBeePackage nesnesi oluşturur."""
         decoded_data = byte_data.decode('utf-8')
         json_data = json.loads(decoded_data)
-        
+
         package_type = json_data.get("t")
         sender = json_data.get("s")
         params = json_data.get("p", {})
-        
+
         return cls(package_type, sender, params)
 
 
