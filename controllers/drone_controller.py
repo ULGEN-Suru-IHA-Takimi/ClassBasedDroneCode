@@ -42,21 +42,16 @@ class DroneController(XBeeController):
                 print("-- Global position state is good enough for flying.")
                 break
 
-    async def get_home_altitude(self):
-        print("Fetching amsl altitude at home location....")
-        async for terrain_info in self.drone.telemetry.home():
-            return terrain_info.absolute_altitude_m
-
-    async def arm_and_takeoff(self, altitude):
+    async def arm_and_takeoff(self, altitude=20.0):
         print("-- Arming")
         await self.drone.action.arm()
         print("-- Taking off")
         await self.drone.action.takeoff()
-        self.flying_alt = altitude + 20.0
-        print("-- Waiting for drone to reach flying altitude...")
+        self.flying_alt = altitude
+        print(f"-- Waiting for drone to reach {altitude}m altitude...")
         while True:
             async for position in self.drone.telemetry.position():
-                if position.relative_altitude_m >= 10.0:
+                if position.relative_altitude_m >= altitude - 2.0:
                     print("-- Drone reached flying altitude, starting waypoint mission")
                     break
             break
@@ -115,8 +110,7 @@ class DroneController(XBeeController):
     async def run(self):
         await self.connect()
         await self.wait_for_global_position()
-        altitude = await self.get_home_altitude()
-        await self.arm_and_takeoff(altitude)
+        await self.arm_and_takeoff(20.0)
         # XBee cihazını ve thread'leri burada başlat
         self.device.open()
         self.device.add_data_received_callback(self.data_receive_callback)

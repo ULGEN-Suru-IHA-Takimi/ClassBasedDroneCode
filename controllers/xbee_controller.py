@@ -32,6 +32,7 @@ class XBeeController:
         gps = f"{lat*1000000},{lon*1000000}"
         return self._truncate_message(gps)
 
+    
     def _truncate_message(self, msg):
         # XBee'den gelen/giden veri boyutu 65 KB'ı aşmayacak şekilde ayarlanır
         max_bytes = 65 * 1024  # 65 KB
