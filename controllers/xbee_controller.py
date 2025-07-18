@@ -4,12 +4,13 @@ from collections import deque
 from digi.xbee.devices import XBeeDevice
 
 class XBeeController:
-    def __init__(self, port="/dev/ttyUSB0", baud_rate=57600, send_interval=0.1, queue_retention=10, remote_node_id="REMOTE"):
+    def __init__(self, port="/dev/ttyUSB0", baud_rate=57600, send_interval=0.1, queue_retention=10, remote_node_id="REMOTE", drone_id=None):
         self.port = port
         self.baud_rate = baud_rate
         self.send_interval = send_interval
         self.queue_retention = queue_retention
         self.remote_node_id = remote_node_id
+        self.drone_id = drone_id
         self.device = XBeeDevice(self.port, self.baud_rate)
         self.remote_device_cache = None
         self.signal_queue = deque()
@@ -19,17 +20,18 @@ class XBeeController:
     # Gönderilecek mesaj (kısa, virgül ile ayrılmış string)
     def get_message(self):
         # name,velocity,position(x,y,z),orientation(x,y,z),timestamp
-        msg = f"drone2,0.5,0,0,0,0,0,0,{int(time.time())}"
+        prefix = f"{self.drone_id}," if self.drone_id else ""
+        msg = f"{prefix}drone2,0.5,0,0,0,0,0,0,{int(time.time())}"
         return self._truncate_message(msg)
 
     def get_command(self, command = "takeoff"):
-        # Örnek komut: takeoff,land,move
-        cmd = f"{command}"
+        prefix = f"{self.drone_id}," if self.drone_id else ""
+        cmd = f"{prefix}{command}"
         return self._truncate_message(cmd)
 
     def get_gps(self, lat=47.397742, lon=8.545594):
-        # Örnek GPS: lat,lon,alt,timestamp
-        gps = f"{lat*1000000},{lon*1000000}"
+        prefix = f"{self.drone_id}," if self.drone_id else ""
+        gps = f"{prefix}{lat*1000000},{lon*1000000}"
         return self._truncate_message(gps)
 
     

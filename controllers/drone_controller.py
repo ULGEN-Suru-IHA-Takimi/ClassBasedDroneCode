@@ -14,8 +14,8 @@ from xbee_controller import XBeeController
 
 
 class DroneController(XBeeController):
-    def __init__(self, system_address="udpin://0.0.0.0:14540", xbee_port="/dev/ttyUSB0"):
-        super().__init__(port=xbee_port)
+    def __init__(self, system_address="udpin://0.0.0.0:14540", xbee_port="/dev/ttyUSB0", drone_id=None):
+        super().__init__(port=xbee_port, drone_id=drone_id)
         self.system_address = system_address
         self.drone = System()
         self.flying_alt = None
@@ -24,8 +24,6 @@ class DroneController(XBeeController):
             (47.398106, 8.543560, None, 90),   # Waypoint 2
             (47.397106, 8.544060, None, 180),  # Waypoint 3
         ]
-
-    
 
     async def connect(self):
         await self.drone.connect(system_address=self.system_address)
@@ -42,20 +40,33 @@ class DroneController(XBeeController):
                 print("-- Global position state is good enough for flying.")
                 break
 
-    async def arm_and_takeoff(self, altitude=20.0):
+    async def get_home_altitude(self):
+        print("Fetching amsl altitude at home location....")
+        async for terrain_info in self.drone.telemetry.home():
+            return terrain_info.absolute_altitude_m
+
+    async def arm_and_takeoff(self, altitude=None):
         print("-- Arming")
         await self.drone.action.arm()
         print("-- Taking off")
         await self.drone.action.takeoff()
+        if altitude is None:
+            altitude = await self.get_home_altitude() + 10.0
         self.flying_alt = altitude
-        print(f"-- Waiting for drone to reach {altitude}m altitude...")
-        while True:
+        print(f"-- Bekleniyor... (Yükseklik: {altitude}m)")
+        await asyncio.sleep(5)  # 5 saniye bekle, sonra göreve başla
+        # Toleranslı ve döngüsel yükseklik kontrolü
+        max_wait = 30  # saniye
+        waited = 0
+        while waited < max_wait:
             async for position in self.drone.telemetry.position():
-                if position.relative_altitude_m >= altitude - 2.0:
+                print(f"Mevcut yükseklik: {position.relative_altitude_m:.2f}m")
+                if position.relative_altitude_m >= self.flying_alt - 5.0:
                     print("-- Drone reached flying altitude, starting waypoint mission")
-                    break
-            break
-        await asyncio.sleep(2)
+                    return
+            await asyncio.sleep(1)
+            waited += 1
+        print("⚠️ Yükseklik beklenenden düşük, göreve başlıyor!")
 
     async def fly_waypoints(self):
         # Update waypoints with correct altitude
@@ -110,7 +121,7 @@ class DroneController(XBeeController):
     async def run(self):
         await self.connect()
         await self.wait_for_global_position()
-        await self.arm_and_takeoff(20.0)
+        await self.arm_and_takeoff()
         # XBee cihazını ve thread'leri burada başlat
         self.device.open()
         self.device.add_data_received_callback(self.data_receive_callback)
@@ -132,5 +143,5 @@ if __name__ == "__main__":
 
     system_address = args.drone_port
     print(f"Selected Drone ID: {args.drone_id}")
-    controller = DroneController(system_address=system_address, xbee_port=args.xbee_port)
+    controller = DroneController(system_address=system_address, xbee_port=args.xbee_port, drone_id=args.drone_id)
     asyncio.run(controller.run())
