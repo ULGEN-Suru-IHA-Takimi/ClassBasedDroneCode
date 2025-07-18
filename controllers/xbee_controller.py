@@ -295,7 +295,7 @@ if __name__ == "__main__":
         counter = 0
         while my_xbee.connected:
             # Farklı paket tipleri gönderebilirsiniz
-            my_xbee.send(XBeePackage("G", "Sim_UAV", {"x": 47.397606 * 1000000 + counter, "y": 8.543060 * 1000000}))
+            my_xbee.send(XBeePackage("G", "1", {"x": int(47.397606 * 1000000) + counter, "y": int(8.543060 * 1000000)}))
             # my_xbee.send(XBeePackage("H", "Heartbeat_Node1"))
             # my_xbee.send(XBeePackage("W", "WP_1", {"x": 47.400000*1000000, "y": 8.550000*1000000, "h": 90}))
             
