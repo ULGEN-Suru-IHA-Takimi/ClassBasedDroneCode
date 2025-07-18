@@ -300,7 +300,7 @@ if __name__ == "__main__":
             # my_xbee.send(XBeePackage("W", "WP_1", {"x": 47.400000*1000000, "y": 8.550000*1000000, "h": 90}))
             
             counter += 1
-            time.sleep(5) # Her 5 saniyede bir paket gönder
+            time.sleep(0.2) # Her 5 saniyede bir paket gönder
 
     # İşleme ve gönderme thread'lerini başlat
     process_package_thread = threading.Thread(target=process_package_loop, name="ProcessPackageThread", daemon=True)
