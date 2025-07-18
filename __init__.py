@@ -61,7 +61,7 @@ class XBeeController:
         self.queue_lock = threading.Lock()
 
         self.local_xbee_address: XBee64BitAddress = None
-
+        self.send_interval: float = 1.0
         # İç thread'ler
         self.cleaner_thread = None
         self.sender_thread = None
@@ -83,6 +83,7 @@ class XBeeController:
             print(f"[Xbee Controller]: Beklenmedik bir hata oluştu: {e}")
         finally:
             self.connected = self.device.is_open()
+            self._start_internal_threads()
     # Bağlantıyı kapat
     def disconnect(self):
         if self.device or self.connected:
@@ -107,13 +108,12 @@ class XBeeController:
             self.sender_thread.start()
 
     # Sıraları temizle
-    def queue_cleaner(self):
+    def _clean_queues_loop(self):
         while self.device and self.connected:
             now = time.time()
             with self.queue_lock:
-                while self.send_queue and now - self.send_queue[0][0] > QUEUE_RETENTION:
+                while self.send_queue and (now - self.send_queue[0][0]) > QUEUE_RETENTION:
                     self.send_queue.popleft()
-            time.sleep(1)
 
     # Gelen paket listesindeki ilk gelen paketi okuma komutu
     def receive(self):
@@ -139,7 +139,7 @@ class XBeeController:
                                   Sadece API modunda kullanılır. Broadcast için "000000000000FFFF".
         """
         with self.queue_lock:
-            self.send_queue.append((package, remote_xbee_addr_hex))
+            self.send_queue.append((time.time(),package, remote_xbee_addr_hex))
 
 
     # Arkadan sürekli paketi alan loop
