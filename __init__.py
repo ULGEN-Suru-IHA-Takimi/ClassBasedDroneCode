@@ -171,7 +171,7 @@ class XBeeController:
         while self.device and self.connected:
             with self.queue_lock:
                 if self.send_queue:
-                    package, remote_xbee_addr_hex = self.send_queue.popleft()
+                    package_time, package, remote_xbee_addr_hex = self.send_queue.popleft()
                     self._do_send(package, remote_xbee_addr_hex)
             time.sleep(self.send_interval)
         print("[Xbee Controller]: XBee Sender Thread durduruldu.")
@@ -186,18 +186,14 @@ class XBeeController:
             print(f"UYARI: Gönderilmek istenen paket boyutu ({len(data_to_send)} bayt)")
 
         try:
-            if self.is_api_mode:
-                if remote_xbee_addr_hex:
-                    remote_addr_obj = XBee64BitAddress(bytes.fromhex(remote_xbee_addr_hex)) 
-                    remote_xbee = RemoteXBeeDevice(self.device, remote_addr_obj)
-                    self.device.send_data(remote_xbee, data_to_send)
-                    # print(f"Paket API modunda gönderildi: Tipi='{package.package_type}', Hedef='{remote_xbee_addr_hex}', Boyut={len(data_to_send)} bayt")
-                else:
-                    self.device.send_data_broadcast(data_to_send)
-                    # print(f"Paket API modunda BROADCAST edildi: Tipi='{package.package_type}', Boyut={len(data_to_send)} bayt")
+            if remote_xbee_addr_hex:
+                remote_addr_obj = XBee64BitAddress(bytes.fromhex(remote_xbee_addr_hex)) 
+                remote_xbee = RemoteXBeeDevice(self.device, remote_addr_obj)
+                self.device.send_data(remote_xbee, data_to_send)
+                # print(f"Paket API modunda gönderildi: Tipi='{package.package_type}', Hedef='{remote_xbee_addr_hex}', Boyut={len(data_to_send)} bayt")
             else:
-                self.device.send_data_local(data_to_send)
-                # print(f"Paket AT modunda gönderildi (Transparent): Tipi='{package.package_type}', Boyut={len(data_to_send)} bayt")
+                self.device.send_data_broadcast(data_to_send)
+                # print(f"Paket API modunda BROADCAST edildi: Tipi='{package.package_type}', Boyut={len(data_to_send)} bayt")
             
         except TimeoutException:
             print(f"Hata: Paket gönderilirken zaman aşımı oluştu. Hedef XBee ulaşılamıyor olabilir.")
@@ -209,7 +205,7 @@ class XBeeController:
 
 if __name__ == "__main__":
     print('XBee bağlantısı için port girin ("q" default)')
-    input_port = str(input('/dev/ttyUSB? :'))
+    input_port = input('/dev/ttyUSB? :')
 
     if input_port == "q":
         my_xbee = XBeeController(port="/dev/ttyUSB"+input_port)
