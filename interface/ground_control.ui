@@ -1,0 +1,325 @@
+<?xml version='1.0' encoding='utf-8'?>
+<interface version="1.4" author="PygubuDesigner 0.39.3">
+  <project>
+    <settings />
+    <customwidgets />
+  </project>
+  <object class="tk.Toplevel" id="mainwindow" named="True">
+    <property name="height">200</property>
+    <property name="width">200</property>
+    <child>
+      <object class="ttk.Frame" id="frame11">
+        <property name="height">200</property>
+        <property name="width">200</property>
+        <layout manager="pack">
+          <property name="anchor">n</property>
+          <property name="fill">x</property>
+          <property name="side">top</property>
+        </layout>
+      </object>
+    </child>
+    <child>
+      <object class="ttk.Frame" id="frame12">
+        <property name="height">200</property>
+        <property name="width">200</property>
+        <layout manager="pack">
+          <property name="anchor">center</property>
+          <property name="fill">x</property>
+          <property name="side">top</property>
+        </layout>
+        <child>
+          <object class="tk.Frame" id="frame2">
+            <property name="height">200</property>
+            <property name="width">200</property>
+            <layout manager="pack">
+              <property name="fill">both</property>
+              <property name="side">left</property>
+            </layout>
+            <child>
+              <object class="ttk.Labelframe" id="labelframe2">
+                <property name="height">360</property>
+                <property name="text" translatable="yes">Dronelar</property>
+                <property name="width">640</property>
+                <layout manager="pack">
+                  <property name="anchor">nw</property>
+                  <property name="side">top</property>
+                </layout>
+                <child>
+                  <object class="ttk.Frame" id="frame3">
+                    <property name="height">200</property>
+                    <property name="width">200</property>
+                    <layout manager="pack">
+                      <property name="fill">x</property>
+                      <property name="side">top</property>
+                    </layout>
+                    <child>
+                      <object class="ttk.Label" id="selected_drone_label" named="True">
+                        <property name="anchor">nw</property>
+                        <property name="text" translatable="yes">Seçili Dronelar:</property>
+                        <layout manager="pack">
+                          <property name="fill">x</property>
+                          <property name="side">top</property>
+                        </layout>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="ttk.Label" id="selected_mission_label" named="True">
+                        <property name="anchor">nw</property>
+                        <property name="text" translatable="yes">Seçili Görev:</property>
+                        <layout manager="pack">
+                          <property name="fill">x</property>
+                          <property name="side">top</property>
+                        </layout>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="ttk.Frame" id="frame4">
+                        <property name="height">200</property>
+                        <property name="width">200</property>
+                        <layout manager="pack">
+                          <property name="fill">y</property>
+                          <property name="side">top</property>
+                        </layout>
+                        <child>
+                          <object class="ttk.Button" id="arm_button" named="True">
+                            <property name="text" translatable="yes">Arm et</property>
+                            <layout manager="pack">
+                              <property name="side">left</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="ttk.Button" id="assign_mission_button" named="True">
+                            <property name="text" translatable="yes">Görev ata</property>
+                            <layout manager="pack">
+                              <property name="side">left</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="ttk.Button" id="go_home_button" named="True">
+                            <property name="text" translatable="yes">Eve git</property>
+                            <layout manager="pack">
+                              <property name="side">left</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="ttk.Button" id="reboot_button" named="True">
+                            <property name="text" translatable="yes">Yeniden başlat</property>
+                            <layout manager="pack">
+                              <property name="side">left</property>
+                            </layout>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="ttk.Button" id="emergency_button" named="True">
+                            <property name="text" translatable="yes">Acil durdur</property>
+                            <layout manager="pack">
+                              <property name="side">left</property>
+                            </layout>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Frame" id="frame1">
+                    <property name="height">200</property>
+                    <property name="width">200</property>
+                    <layout manager="pack">
+                      <property name="side">top</property>
+                    </layout>
+                    <child>
+                      <object class="tk.Listbox" id="drone_list" named="True">
+                        <property name="height">4</property>
+                        <property name="width">60</property>
+                        <layout manager="pack">
+                          <property name="fill">y</property>
+                          <property name="side">left</property>
+                        </layout>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="ttk.Scrollbar" id="drone_list_scroll" named="True">
+                        <property name="orient">vertical</property>
+                        <layout manager="pack">
+                          <property name="anchor">e</property>
+                          <property name="fill">both</property>
+                          <property name="side">left</property>
+                        </layout>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Labelframe" id="labelframe4">
+                <property name="height">200</property>
+                <property name="text" translatable="yes">Paketler</property>
+                <property name="width">200</property>
+                <layout manager="pack">
+                  <property name="fill">x</property>
+                  <property name="side">top</property>
+                </layout>
+                <child>
+                  <object class="tk.Listbox" id="package_list" named="True">
+                    <property name="height">12</property>
+                    <property name="width">60</property>
+                    <layout manager="pack">
+                      <property name="fill">x</property>
+                      <property name="side">left</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Scrollbar" id="package_list_scroll" named="True">
+                    <property name="orient">vertical</property>
+                    <layout manager="pack">
+                      <property name="fill">y</property>
+                      <property name="side">left</property>
+                    </layout>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Frame" id="frame5">
+            <property name="height">200</property>
+            <property name="width">200</property>
+            <layout manager="pack">
+              <property name="fill">y</property>
+              <property name="side">left</property>
+            </layout>
+            <child>
+              <object class="ttk.Labelframe" id="labelframe5">
+                <property name="height">200</property>
+                <property name="text" translatable="yes">Görevler</property>
+                <property name="width">200</property>
+                <layout manager="pack">
+                  <property name="fill">both</property>
+                  <property name="side">top</property>
+                </layout>
+                <child>
+                  <object class="tk.Listbox" id="mission_list" named="True">
+                    <property name="height">8</property>
+                    <property name="width">20</property>
+                    <layout manager="pack">
+                      <property name="fill">both</property>
+                      <property name="side">left</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Scrollbar" id="mission_list_scroll" named="True">
+                    <property name="orient">vertical</property>
+                    <layout manager="pack">
+                      <property name="fill">y</property>
+                      <property name="side">left</property>
+                    </layout>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Labelframe" id="labelframe7">
+                <property name="height">200</property>
+                <property name="text" translatable="yes">waypointler</property>
+                <property name="width">200</property>
+                <layout manager="pack">
+                  <property name="fill">both</property>
+                  <property name="side">top</property>
+                </layout>
+                <child>
+                  <object class="ttk.Frame" id="frame7">
+                    <property name="height">200</property>
+                    <property name="width">200</property>
+                    <layout manager="pack">
+                      <property name="fill">both</property>
+                      <property name="side">top</property>
+                    </layout>
+                    <child>
+                      <object class="ttk.Button" id="add_waypoint_button" named="True">
+                        <property name="text" translatable="yes">Ekle</property>
+                        <layout manager="pack">
+                          <property name="fill">both</property>
+                          <property name="side">left</property>
+                        </layout>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="ttk.Button" id="remove_waypoint_button" named="True">
+                        <property name="text" translatable="yes">Sil</property>
+                        <layout manager="pack">
+                          <property name="fill">both</property>
+                          <property name="side">right</property>
+                        </layout>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Frame" id="frame6">
+                    <property name="height">200</property>
+                    <property name="width">200</property>
+                    <layout manager="pack">
+                      <property name="side">top</property>
+                    </layout>
+                    <child>
+                      <object class="tk.Listbox" id="listbox4">
+                        <layout manager="pack">
+                          <property name="fill">both</property>
+                          <property name="side">left</property>
+                        </layout>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="ttk.Scrollbar" id="scrollbar4">
+                        <property name="orient">vertical</property>
+                        <layout manager="pack">
+                          <property name="fill">y</property>
+                          <property name="side">left</property>
+                        </layout>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="ttk.Frame" id="frame13">
+        <property name="height">200</property>
+        <property name="width">200</property>
+        <layout manager="pack">
+          <property name="anchor">s</property>
+          <property name="fill">x</property>
+          <property name="side">bottom</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="port_label" named="True">
+            <property name="text" translatable="yes">Bağlı olan port:       </property>
+            <layout manager="pack">
+              <property name="side">left</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="label5">
+            <property name="text" translatable="yes">Ülgen Teknofest</property>
+            <layout manager="pack">
+              <property name="side">right</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

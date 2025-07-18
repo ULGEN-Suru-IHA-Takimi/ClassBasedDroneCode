@@ -1,0 +1,44 @@
+<?xml version='1.0' encoding='utf-8'?>
+<interface version="1.4" author="PygubuDesigner 0.39.3">
+  <project>
+    <settings />
+    <customwidgets />
+  </project>
+  <object class="pygubu.widgets.Dialog" id="port_dialog" named="True">
+    <property name="height">200</property>
+    <property name="width">200</property>
+    <child>
+      <object class="ttk.Button" id="port_confirm_button" named="True">
+        <property name="text" translatable="yes">Bağlan</property>
+        <layout manager="pack">
+          <property name="fill">x</property>
+          <property name="side">bottom</property>
+        </layout>
+      </object>
+    </child>
+    <child>
+      <object class="ttk.Label" id="port_dialog_label" named="True">
+        <property name="text" translatable="yes">Xbee portunuzu giriniz.</property>
+        <layout manager="pack">
+          <property name="side">bottom</property>
+        </layout>
+      </object>
+    </child>
+    <child>
+      <object class="ttk.Label" id="label6">
+        <property name="text" translatable="yes">Xbee Portu: </property>
+        <layout manager="pack">
+          <property name="side">left</property>
+        </layout>
+      </object>
+    </child>
+    <child>
+      <object class="ttk.Entry" id="port_entry" named="True">
+        <property name="width">10</property>
+        <layout manager="pack">
+          <property name="side">left</property>
+        </layout>
+      </object>
+    </child>
+  </object>
+</interface>
