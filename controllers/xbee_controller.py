@@ -18,20 +18,19 @@ class XBeeController:
         self.running = True
 
     # Gönderilecek mesaj (kısa, virgül ile ayrılmış string)
-    def get_message(self):
-        # name,velocity,position(x,y,z),orientation(x,y,z),timestamp
-        prefix = f"{self.drone_id}," if self.drone_id else ""
-        msg = f"{prefix}drone2,0.5,0,0,0,0,0,0,{int(time.time())}"
-        return self._truncate_message(msg)
+ 
 
     def get_command(self, command = "takeoff"):
         prefix = f"{self.drone_id}," if self.drone_id else ""
         cmd = f"{prefix}{command}"
         return self._truncate_message(cmd)
 
-    def get_gps(self, lat=47.397742, lon=8.545594):
+    def get_gps(self, lat=47.397742, lon=8.545594, alt=None):
         prefix = f"{self.drone_id}," if self.drone_id else ""
-        gps = f"{prefix}{lat*1000000},{lon*1000000}"
+        if alt is not None:
+            gps = f"{prefix}{lat*1000000},{lon*1000000},{alt}"
+        else:
+            gps = f"{prefix}{lat*1000000},{lon*1000000}"
         return self._truncate_message(gps)
 
     

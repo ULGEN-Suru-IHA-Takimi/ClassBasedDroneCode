@@ -87,7 +87,7 @@ class DroneController(XBeeController):
                         other_gps = self.get_last_received()
                         print(f"Diğer drone'dan alınan GPS: {other_gps}")
                         # Kendi GPS'ini diğer drone'lara gönder
-                        my_gps = self.get_gps(position.latitude_deg, position.longitude_deg)
+                        my_gps = self.get_gps(position.latitude_deg, position.longitude_deg, position.absolute_altitude_m)
                         # Mesajı OUT kuyruğuna ekle
                         with self.queue_lock:
                             self.signal_queue.append((time.time(), 'OUT', my_gps))
