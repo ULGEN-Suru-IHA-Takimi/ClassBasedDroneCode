@@ -150,13 +150,13 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        # GÜNCELLENDİ: Yatay PID kp kazancı 0.5'ten 1.5'e artırıldı
-        self.pid_north = PIDController(kp=1.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=1.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5)  
+        # GÜNCELLENDİ: Yatay PID kp kazancı düşürüldü, kd artırıldı
+        self.pid_north = PIDController(kp=0.8, ki=0.005, kd=0.3, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=0.8, ki=0.005, kd=0.3, integral_max=0.5, integral_min=-0.5)  
         # Dikey PID kazançları korunuyor, ancak daha fazla test gerekebilir
         self.pid_down = PIDController(kp=0.5, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
 
-        # GÜNCELLENDİ: Drone'un maksimum yatay hızı artırıldı
+        # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
 
 
@@ -451,8 +451,13 @@ class DroneController(DroneConnection):
 
 
                 # Hedefe ulaşıldı mı?
-                if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
-                    print(f"[DroneController]: Hedef koordinatlara ulaşıldı.")
+                # Sadece mesafeye değil, hıza da bakarak durma koşulunu iyileştir
+                current_horizontal_speed = math.sqrt(current_vel_north**2 + current_vel_east**2)
+                current_vertical_speed = abs(current_vel_down)
+
+                if (horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M and
+                    current_horizontal_speed < 0.5 and current_vertical_speed < 0.5): # Hız toleransı eklendi
+                    print(f"[DroneController]: Hedef koordinatlara ulaşıldı ve hız yeterince düşük.")
                     break # Döngüden çık
 
                 dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
@@ -489,7 +494,8 @@ class DroneController(DroneConnection):
                     command_vel_east *= scale_factor
                 
                 # Dikey hız için de bir limit koyalım
-                max_vertical_vel = 1.0 # m/s (Örnek değer, ayarlanabilir)
+                # GÜNCELLENDİ: Dikey hız limiti artırıldı
+                max_vertical_vel = 3.0 # m/s (Örnek değer, ayarlanabilir)
                 if abs(command_vel_down) > max_vertical_vel:
                     command_vel_down = math.copysign(max_vertical_vel, command_vel_down)
 
