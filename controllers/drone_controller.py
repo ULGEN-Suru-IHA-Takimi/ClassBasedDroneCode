@@ -150,11 +150,11 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        # GÜNCELLENDİ: Yatay PID kp düşürüldü, ki düşürüldü, kd artırıldı
-        self.pid_north = PIDController(kp=0.2, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=0.2, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5)  
-        # Dikey PID kazançları korunuyor
-        self.pid_down = PIDController(kp=0.5, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
+        # GÜNCELLENDİ: Yatay PID kp artırıldı, ki artırıldı, kd düşürüldü
+        self.pid_north = PIDController(kp=0.3, ki=0.005, kd=0.5, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=0.3, ki=0.005, kd=0.5, integral_max=0.5, integral_min=-0.5)  
+        # GÜNCELLENDİ: Dikey PID kp artırıldı, ki düşürüldü, kd artırıldı
+        self.pid_down = PIDController(kp=0.8, ki=0.02, kd=0.4, integral_max=1.0, integral_min=-1.0)  
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
