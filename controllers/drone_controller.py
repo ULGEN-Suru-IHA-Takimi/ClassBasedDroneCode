@@ -7,8 +7,7 @@ import json
 import os
 import importlib.util
 from mavsdk import System, telemetry, offboard, action
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Kendi modüllerimizi import ediyoruz
 # Proje kök dizininden import etmek için sys.path'e ekleme yapılabilir
 # Ancak modüler yapıda olduğu için göreceli importlar tercih edilir.
@@ -364,7 +363,7 @@ class DroneController(DroneConnection):
             
             # PID ile hız komutları hesapla (basit bir örnek)
             # Bu değerler, offboard.set_velocity_ned() veya set_position_ned() ile kullanılabilir.
-            # Burada offboard.set_position_ned kullanıldığı için, PID çıktısını doğrudan konum farkına ekleyebiliriz.
+            # Burada offboard.set_position_ned() kullanıldığı için, PID çıktısını doğrudan konum farkına ekleyebiliriz.
             
             # PID'den gelen düzeltmeler
             correction_lat = self.pid_lat.calculate(error_lat, dt)
@@ -387,15 +386,9 @@ class DroneController(DroneConnection):
             command_alt = waypoint.alt + correction_alt # İrtifa için APF şimdilik düşünülmüyor
 
             # MAVSDK offboard komutunu gönder
-            await self.drone.offboard.set_position_ned(
-                offboard.PositionNedYaw(
-                    north_m=0.0, # MAVSDK'da goto_location daha yüksek seviye
-                    east_m=0.0,
-                    down_m=-command_alt, # Down is positive for MAVSDK NED frame
-                    yaw_deg=waypoint.hed # Hedefe doğru yönelme
-                )
-            )
-            # Alternatif olarak daha basit goto_location kullanılabilir:
+            # MAVSDK'da goto_location daha yüksek seviye bir fonksiyondur ve genellikle tercih edilir.
+            # set_position_ned daha düşük seviye kontrol için kullanılır.
+            # Burada goto_location kullanmak daha uygun olacaktır.
             await self.drone.action.goto_location(command_lat, command_lon, command_alt, waypoint.hed)
 
 
@@ -404,8 +397,42 @@ class DroneController(DroneConnection):
             # MAVSDK'nın kendi konum telemetrisini kullanarak mesafeyi hesaplayın.
             
             # Basit Öklid mesafesi (coğrafi koordinatlar için uygun değil, sadece örnek)
-            distance_to_target = ((waypoint.lat - current_lat)**2 + (waypoint.lon - current_lon)**2)**0.5 * 111320 # Yaklaşık metreye çevirme
-            if distance_to_target < TOLERANCE_M and abs(target_alt_abs - current_alt) < TOLERANCE_M:
+            # Gerçek bir mesafe hesaplaması için haversine veya Vincenty formülleri kullanılmalıdır.
+            # Şimdilik basit bir yaklaşım:
+            # Yaklaşık 1 derece enlem ~ 111 km
+            # Yaklaşık 1 derece boylam ~ 111 * cos(latitude) km
+            # Bu yüzden sadece farkların karekökünü almak yeterli değildir.
+            # Ancak test amaçlı olarak, küçük mesafelerde bu yaklaşım bir fikir verebilir.
+            
+            # Örnek: Basit bir mesafe kontrolü (daha doğru bir coğrafi mesafe hesaplaması gereklidir)
+            # Burada sadece lat/lon farkını kullanıyoruz, bu doğru bir mesafe değil.
+            # Gerçek bir uygulamada `geopy` gibi kütüphanelerle mesafe hesaplanmalıdır.
+            
+            # Mesafe hesaplaması için basit bir placeholder:
+            # distance_to_target = ((waypoint.lat - current_lat)**2 + (waypoint.lon - current_lon)**2)**0.5 * 111320 # Yaklaşık metreye çevirme
+            # MavSDK'nın kendi `distance_to_waypoint` gibi bir metodu varsa o tercih edilmelidir.
+            # Şimdilik, hedef konuma yeterince yakın olup olmadığını kontrol etmek için basit bir eşik kullanacağız.
+            
+            # MAVSDK'nın `distance_to_point` metodunu kullanabiliriz (telemetry'de yok, ancak kendimiz hesaplayabiliriz).
+            # Veya `goto_location` zaten hedefe ulaştığında tamamlanır.
+            # `goto_location` asenkron bir çağrı olduğu için, bu döngü `goto_location`'ın kendisi tamamlanana kadar beklemeyecektir.
+            # Bu nedenle, `goto_location`'ı her döngüde çağırmak yerine, bir kez çağırıp tamamlanmasını beklemek daha mantıklı olabilir.
+            # Ancak PID/APF entegrasyonu için sürekli komut göndermek gerekir.
+            
+            # Bu kısım, `goto_location`'ın nasıl kullanıldığına bağlı olarak değişebilir.
+            # Eğer `goto_location`'ı sürekli olarak güncellenen PID/APF komutlarıyla kullanacaksak,
+            # döngüde kalıp mesafeyi kontrol etmeye devam etmeliyiz.
+            
+            # Mevcut yaklaşımda, `goto_location` her döngüde çağrıldığından,
+            # hedefe ulaşma kontrolünü manuel olarak yapmamız gerekiyor.
+            
+            # Basit bir mesafe kontrolü (doğruluk için Haversine formülü önerilir)
+            # Bu sadece test amaçlı bir yaklaşımdır.
+            distance_lat = abs(waypoint.lat - current_lat) * 111320 # Yaklaşık metre
+            distance_lon = abs(waypoint.lon - current_lon) * 111320 * abs(math.cos(math.radians(current_lat))) # Yaklaşık metre
+            horizontal_distance = (distance_lat**2 + distance_lon**2)**0.5
+            
+            if horizontal_distance < TOLERANCE_M and abs(target_alt_abs - current_alt) < TOLERANCE_M:
                 print(f"[DroneController]: Waypoint {waypoint_id} hedefine ulaşıldı.")
                 break
 
@@ -563,9 +590,11 @@ async def main():
     try:
         await drone_controller.connect()
 
-        # Eğer drone veya XBee bağlantısı başarısız olursa çık
-        if not await drone_controller.drone.is_connected() or (drone_controller.xbee_controller and not drone_controller.xbee_controller.connected):
-            print("Bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
+        # Eğer XBee bağlantısı başarısız olursa çık
+        # Drone bağlantısı, drone_controller.connect() içinde zaten kontrol ediliyor.
+        # Eğer bu noktaya gelindiyse, drone bağlantısının başarılı olduğu varsayılır.
+        if drone_controller.xbee_controller and not drone_controller.xbee_controller.connected:
+            print("XBee bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
             return
 
         print("\nDrone Controller başarıyla başlatıldı.")
