@@ -150,7 +150,7 @@ class DroneController(DroneConnection):
         self.pid_east = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Doğu yönü için PID
         self.pid_down = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Aşağı yönü (irtifa) için PID
 
-        self.drone_speed = 1.0 # GÜNCELLENDİ: Drone'un hedef hızı (m/s)
+        self.drone_speed = 1.0 # Drone'un hedef hızı (m/s)
 
 
     async def connect(self) -> None:
@@ -366,16 +366,12 @@ class DroneController(DroneConnection):
             print(f"    Bilinmeyen paket tipi alındı: {package_type}")
 
 
-    async def goto_waypoint(self, waypoint_id: str) -> bool: # relative_alt kaldırıldı, waypoint'ten alınacak
+    async def goto_location(self, target_lat: float, target_lon: float, target_alt: float, target_hed: float) -> bool:
         """
-        Belirtilen waypoint ID'sine drone'u PID ve APF tabanlı hız kontrolü ile gönderir.
+        Belirtilen koordinatlara PID ve APF tabanlı hız kontrolü ile drone'u gönderir.
+        Bu fonksiyon, goto_waypoint tarafından dahili olarak kullanılır.
         """
-        waypoint = self.waypoint_manager.read(waypoint_id)
-        if not waypoint:
-            print(f"[DroneController]: Waypoint {waypoint_id} bulunamadı.")
-            return False
-
-        print(f"[DroneController]: Waypoint {waypoint_id} hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={waypoint.alt}m, Hed={waypoint.hed} derece")
+        print(f"[DroneController]: Hedef koordinatlara gidiliyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
 
         # Offboard modunu başlat
         # Başlangıçta drone'un mevcut konumunda kalması için sıfır hız komutu gönder
@@ -413,16 +409,16 @@ class DroneController(DroneConnection):
 
                     # Hedefe olan farkı metre cinsinden hesapla (Kuzey, Doğu, Aşağı)
                     # Hata = Hedef - Mevcut
-                    error_north_m = (waypoint.lat - current_lat) * lat_to_m
-                    error_east_m = (waypoint.lon - current_lon) * lon_to_m
-                    error_down_m = (waypoint.alt - current_alt) # Waypoint irtifası - mevcut irtifa
+                    error_north_m = (target_lat - current_lat) * lat_to_m
+                    error_east_m = (target_lon - current_lon) * lon_to_m
+                    error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
 
                     # Hedefe olan 2D mesafeyi kontrol et
                     horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                     
                     # Hedefe ulaşıldı mı?
                     if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
-                        print(f"[DroneController]: Waypoint {waypoint_id} hedefine ulaşıldı.")
+                        print(f"[DroneController]: Hedef koordinatlara ulaşıldı.")
                         break # Döngüden çık
 
                     dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
@@ -460,10 +456,9 @@ class DroneController(DroneConnection):
                         command_vel_down *= scale_factor
 
                     # Drone'a hız komutunu gönder
-                    # Yaw'ı waypoint'in hedefine veya hareket yönüne ayarlayabiliriz.
-                    # Şimdilik waypoint'in hedef yönünü kullanalım.
+                    # Yaw'ı hedef yöne ayarlayalım.
                     await self.drone.offboard.set_velocity_ned(
-                        offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, waypoint.hed)
+                        offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
                     )
                     # print(f"  Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}")
 
@@ -472,9 +467,9 @@ class DroneController(DroneConnection):
                     break # while döngüsünden de çık
 
         except asyncio.CancelledError:
-            print("[DroneController]: Waypoint'e gitme görevi iptal edildi.")
+            print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
         except Exception as e:
-            print(f"[DroneController]: Waypoint'e gitme görevinde hata: {e}")
+            print(f"[DroneController]: Hedef koordinatlara gitme görevinde hata: {e}")
         finally:
             # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
             try:
@@ -483,6 +478,20 @@ class DroneController(DroneConnection):
             except offboard.OffboardError as error:
                 print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
             return True # Görev tamamlandı veya iptal edildi
+
+
+    async def goto_waypoint(self, waypoint_id: str) -> bool:
+        """
+        Belirtilen waypoint ID'sine drone'u gönderir.
+        Bu fonksiyon, waypoint bilgilerini alıp goto_location'ı çağırır.
+        """
+        waypoint = self.waypoint_manager.read(waypoint_id)
+        if not waypoint:
+            print(f"[DroneController]: Waypoint {waypoint_id} bulunamadı.")
+            return False
+
+        # Waypoint'ten alınan koordinat ve yön bilgileri ile goto_location'ı çağır
+        return await self.goto_location(waypoint.lat, waypoint.lon, waypoint.alt, waypoint.hed)
 
 
     def load_missions(self, missions_folder: str = "missions"):
@@ -643,6 +652,7 @@ async def main():
             print("  'takeoff': Drone'u havalandır (arm edilmiş olmalı)")
             print("  'land'   : Drone'u indir")
             print("  'goto <waypoint_id>': Belirtilen waypointe git (PID/APF kontrollü)")
+            print("  'goto_coord <lat> <lon> <alt> <hed>': Belirtilen koordinatlara git (PID/APF kontrollü)")
             print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
             print("  'rmwp <id>': Waypoint sil")
             print("  'sendgps': Manuel GPS paketi gönder (test)")
@@ -677,6 +687,19 @@ async def main():
                     await drone_controller.goto_waypoint(waypoint_id)
                 else:
                     print("Kullanım: goto <waypoint_id>")
+            elif command.startswith('goto_coord '): # Yeni komut eklendi
+                parts = command.split()
+                if len(parts) == 5:
+                    try:
+                        lat = float(parts[1])
+                        lon = float(parts[2])
+                        alt = float(parts[3])
+                        hed = float(parts[4])
+                        await drone_controller.goto_location(lat, lon, alt, hed)
+                    except ValueError:
+                        print("Geçersiz sayı formatı. Kullanım: goto_coord <lat> <lon> <alt> <hed>")
+                else:
+                    print("Kullanım: goto_coord <lat> <lon> <alt> <hed>")
             elif command.startswith('addwp '):
                 parts = command.split()
                 if len(parts) == 6:

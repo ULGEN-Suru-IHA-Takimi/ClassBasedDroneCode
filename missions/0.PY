@@ -23,7 +23,7 @@ class SimpleWaypointMission(Mission):
         drone = self.drone_controller.drone
         xbee = self.drone_controller.xbee_controller
 
-        wp_id = self.wp_id
+        my_drone_id = self.drone_controller.DRONE_ID
 
         print(self.variable)
 
@@ -49,20 +49,17 @@ class SimpleWaypointMission(Mission):
         xbee.send(confirm_package)
         print(f"[{self.mission_name} - ID:{self.mission_id}]: Görev onay paketi gönderildi: {self.mission_id}")
 
-        self.drone_controller.waypoint_manager.add(wp_id,40.325757, 36.473615, 10.0, 0)
-        waypoint = self.drone_controller.waypoint_manager.read(wp_id)
-        if not waypoint:
-            print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint '{wp_id}' bulunamadı. Bu waypoint atlanıyor.")
+        waypoint = (47.397606, 8.543060, 10.0, 0)
         # Waypoint'in kendi irtifası varsa onu kullan, yoksa varsayılanı kullan
-        target_altitude = waypoint.alt if waypoint.alt is not None else self.default_altitude_m
+        target_altitude = waypoint[2] if waypoint[2] is not None else self.default_altitude_m
 
-        print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint {wp_id} hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={target_altitude}m, Hed={waypoint.hed} derece")
+        print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={target_altitude}m, Hed={waypoint.hed} derece")
 
-        if not await self.drone_controller.goto_waypoint(wp_id):
-            print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint {wp_id} hedefine ulaşılamadı. Görev iptal ediliyor.")
+        if not await self.drone_controller.goto_location(waypoint):
+            print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine ulaşılamadı. Görev iptal ediliyor.")
             await drone.action.land() # Güvenli iniş
             return False
-        print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint {wp_id} hedefine ulaşıldı.")
+        print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine ulaşıldı.")
         await asyncio.sleep(2) # Waypointte bekleme
 
         print(f"[{self.mission_name} - ID:{self.mission_id}]: Tüm waypointlere ulaşıldı. İniş yapılıyor...")
