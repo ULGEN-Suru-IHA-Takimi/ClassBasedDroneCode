@@ -150,13 +150,14 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        # GÜNCELLENDİ: Yatay PID kazançları artırıldı
-        self.pid_north = PIDController(kp=0.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=0.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5)  
-        # Dikey PID kazançları korunuyor
+        # GÜNCELLENDİ: Yatay PID kp kazancı 0.5'ten 1.5'e artırıldı
+        self.pid_north = PIDController(kp=1.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=1.5, ki=0.005, kd=0.1, integral_max=0.5, integral_min=-0.5)  
+        # Dikey PID kazançları korunuyor, ancak daha fazla test gerekebilir
         self.pid_down = PIDController(kp=0.5, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
 
-        self.drone_speed = 1.0 # Drone'un hedef hızı (m/s)
+        # GÜNCELLENDİ: Drone'un maksimum yatay hızı artırıldı
+        self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
 
 
     async def connect(self) -> None:
@@ -406,10 +407,14 @@ class DroneController(DroneConnection):
         try:
             # Telemetry akışını dış döngüde başlatıyoruz
             position_async_iterator = self.drone.telemetry.position().__aiter__()
+            # Velocity akışını da başlatıyoruz (debug için)
+            velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
+
 
             while not self._stop_tasks_event.is_set():
                 try:
                     position_info = await position_async_iterator.__anext__() # Bir sonraki telemetri bilgisini al
+                    velocity_info = await velocity_async_iterator.__anext__() # Bir sonraki hız bilgisini al
                 except StopAsyncIteration:
                     print("[DroneController]: Telemetry akışı sona erdi.")
                     break # Akış biterse döngüden çık
@@ -419,6 +424,11 @@ class DroneController(DroneConnection):
                 current_lat = position_info.latitude_deg
                 current_lon = position_info.longitude_deg
                 current_alt = position_info.absolute_altitude_m # Mutlak irtifa
+
+                current_vel_north = velocity_info.north_m_s
+                current_vel_east = velocity_info.east_m_s
+                current_vel_down = velocity_info.down_m_s
+
 
                 # Boylamı metreye çevirme faktörü (mevcut enleme göre değişir)
                 lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
@@ -437,6 +447,8 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
                 print(f"  [DEBUG] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
                 print(f"  [DEBUG] Yatay Mesafe: {horizontal_distance:.2f}m")
+                print(f"  [DEBUG] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
+
 
                 # Hedefe ulaşıldı mı?
                 if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
