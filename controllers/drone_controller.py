@@ -17,7 +17,7 @@ from mavsdk import System, telemetry, offboard, action
 
 # Kendi modüllerimizi import ediyoruz
 from connect.drone_connection import DroneConnection
-from controllers.xbee_controller import XBeeController, XBeePackage # XBeePackage buraya da import edildi
+from controllers.xbee_controller import XBeeController, XBeePackage
 from controllers.waypoint_controller import waypoints, Waypoint
 # Mission temel sınıfını doğrudan import ediyoruz
 from controllers.mission_controller import Mission as MissionBase
@@ -26,14 +26,27 @@ from controllers.mission_controller import Mission as MissionBase
 # PID-APF için basit bir placeholder (gerçek implementasyon çok daha karmaşıktır)
 # Çarpışma önleme için daha gelişmiş algoritmalar ve sensör verisi gereklidir.
 class PIDController:
+    """
+    Basit bir PID kontrolcüsü.
+    """
     def __init__(self, kp, ki, kd):
         self.kp = kp
         self.ki = ki
         self.kd = kd
-        self.prev_error = 0
-        self.integral = 0
+        self.prev_error = 0.0
+        self.integral = 0.0
+        self.setpoint = 0.0 # Hedef değer (örn: 0 hata)
 
-    def calculate(self, error, dt):
+    def calculate(self, current_value, dt):
+        """
+        PID çıktısını hesaplar.
+        Args:
+            current_value (float): Mevcut değer (örn: konum hatası).
+            dt (float): Son hesaplamadan bu yana geçen zaman.
+        Returns:
+            float: PID kontrol çıktısı (örn: hız komutu).
+        """
+        error = self.setpoint - current_value
         self.integral += error * dt
         derivative = (error - self.prev_error) / dt
         output = self.kp * error + self.ki * self.integral + self.kd * derivative
@@ -41,36 +54,68 @@ class PIDController:
         return output
 
 class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
+    """
+    Yapay Potansiyel Alan (APF) tabanlı çarpışma önleme.
+    Basit bir itme kuvveti modeli kullanır.
+    """
     def __init__(self, drone_id: str):
         self.drone_id = drone_id
         # Çarpışma önleme için diğer dronların konumları burada tutulabilir
-        self.other_drone_positions = {} # {drone_id: (lat, lon)}
+        self.other_drone_positions = {} # {drone_id: (lat, lon, alt)}
+        self.repulsion_distance = 15.0 # Metre cinsinden itme kuvveti uygulama mesafesi
+        self.repulsion_strength = 0.5 # İtme kuvvetinin şiddeti
 
-    def update_other_drone_position(self, drone_id: str, lat: float, lon: float):
-        if drone_id != self.drone_id: # Kendi konumumuzu takip etmıyoruz
-            self.other_drone_positions[drone_id] = (lat, lon)
-            # print(f"APF: Drone {drone_id} konumu güncellendi: {lat}, {lon}")
+    def update_other_drone_position(self, drone_id: str, lat: float, lon: float, alt: float):
+        """
+        Diğer dronların konumunu günceller.
+        """
+        if drone_id != self.drone_id: # Kendi konumumuzu takip etmiyoruz
+            self.other_drone_positions[drone_id] = (lat, lon, alt)
+            # print(f"APF: Drone {drone_id} konumu güncellendi: Lat={lat}, Lon={lon}, Alt={alt}")
 
-    def calculate_avoidance_vector(self, current_lat, current_lon, target_lat, target_lon):
-        # Basit bir APF mantığı: Diğer dronlara çok yakınsa itme kuvveti uygula
-        # Gerçek bir APF, çekme ve itme kuvvetlerini hesaplar.
-        avoidance_lat_force = 0.0
-        avoidance_lon_force = 0.0
+    def calculate_avoidance_vector(self, current_lat, current_lon, current_alt):
+        """
+        Mevcut konuma göre çarpışma önleme vektörünü hesaplar.
+        Args:
+            current_lat (float): Mevcut enlem.
+            current_lon (float): Mevcut boylam.
+            current_alt (float): Mevcut irtifa.
+        Returns:
+            tuple: (avoidance_north_force, avoidance_east_force, avoidance_down_force)
+                   Hız komutlarına eklenecek metre/saniye cinsinden vektörler.
+        """
+        avoidance_north_force = 0.0
+        avoidance_east_force = 0.0
+        avoidance_down_force = 0.0
         
-        # Bu kısım, diğer dronların konumlarını kullanarak çarpışma önleme vektörlerini hesaplar.
-        # Gerçek bir uygulamada, dronların hızları, yönleri ve sensör verileri de dikkate alınır.
-        # Örneğin, her bir diğer drone için bir itme kuvveti hesaplanabilir ve toplanabilir.
-        
-        # for other_id, (other_lat, other_lon) in self.other_drone_positions.items():
-        #     distance = calculate_distance(current_lat, current_lon, other_lat, other_lon)
-        #     if distance < 10: # 10 metreden yakınsa
-        #         # Basit bir itme kuvveti
-        #         force_magnitude = (10 - distance) * 0.1 # Mesafe azaldıkça kuvvet artsın
-        #         angle = calculate_angle(current_lat, current_lon, other_lat, other_lon)
-        #         avoidance_lat_force -= force_magnitude * math.cos(angle)
-        #         avoidance_lon_force -= force_magnitude * math.sin(angle)
+        # Yaklaşık 1 derece enlem ~ 111320 metre
+        # Yaklaşık 1 derece boylam ~ 111320 * cos(latitude_radians) metre
+        lat_to_m = 111320.0
+        lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
 
-        return avoidance_lat_force, avoidance_lon_force
+        for other_id, (other_lat, other_lon, other_alt) in self.other_drone_positions.items():
+            # Mesafeyi metre cinsinden hesapla
+            delta_lat_m = (current_lat - other_lat) * lat_to_m
+            delta_lon_m = (current_lon - other_lon) * lon_to_m
+            delta_alt_m = current_alt - other_alt # İrtifa farkı
+
+            distance_2d = math.sqrt(delta_lat_m**2 + delta_lon_m**2)
+            distance_3d = math.sqrt(distance_2d**2 + delta_alt_m**2)
+
+            if distance_3d < self.repulsion_distance and distance_3d > 0.1: # Çok yakınsa ve sıfır değilse
+                # İtme kuvveti hesapla (mesafe azaldıkça kuvvet artsın)
+                force_magnitude = self.repulsion_strength * (self.repulsion_distance - distance_3d) / self.repulsion_distance
+                
+                # Yön vektörü (diğer drona doğru)
+                direction_lat = delta_lat_m / distance_2d if distance_2d > 0 else 0
+                direction_lon = delta_lon_m / distance_2d if distance_2d > 0 else 0
+                direction_alt = delta_alt_m / distance_3d if distance_3d > 0 else 0
+
+                avoidance_north_force += force_magnitude * direction_lat
+                avoidance_east_force += force_magnitude * direction_lon
+                avoidance_down_force += force_magnitude * direction_alt # İrtifa için de itme
+
+        return avoidance_north_force, avoidance_east_force, avoidance_down_force
 
 
 class DroneController(DroneConnection):
@@ -86,7 +131,6 @@ class DroneController(DroneConnection):
         self.xbee_controller: XBeeController = None
         self.waypoint_manager = waypoints() # Waypoint'leri yönetecek sınıf
         self.current_mission = None # Aktif görevi tutar
-        # self.missions artık {filename_id: {'class': MissionClass, 'name': mission_name, 'class_id': actual_mission_id_from_class}} şeklinde olacak
         self.missions = {} 
 
         self._gps_send_task = None
@@ -102,9 +146,11 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        self.pid_lat = PIDController(kp=0.05, ki=0.001, kd=0.01)
-        self.pid_lon = PIDController(kp=0.05, ki=0.001, kd=0.01)
-        self.pid_alt = PIDController(kp=0.1, ki=0.002, kd=0.02)
+        self.pid_north = PIDController(kp=0.5, ki=0.01, kd=0.1) # Kuzey yönü için PID
+        self.pid_east = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Doğu yönü için PID
+        self.pid_down = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Aşağı yönü (irtifa) için PID
+
+        self.drone_speed = 1.0 # GÜNCELLENDİ: Drone'un hedef hızı (m/s)
 
 
     async def connect(self) -> None:
@@ -162,8 +208,6 @@ class DroneController(DroneConnection):
         if self.xbee_controller:
             self.xbee_controller.disconnect()
         
-        # MAVSDK bağlantısını kapat (isteğe bağlı, System objesi kapatma metodu yok)
-        # self.drone.close() # MAVSDK'da doğrudan bir close metodu yok, bağlantı kendiliğinden kapanır.
         print("[DroneController]: Drone Controller kapatıldı.")
 
 
@@ -206,14 +250,16 @@ class DroneController(DroneConnection):
 
                 lat = position.latitude_deg
                 lon = position.longitude_deg
+                alt = position.absolute_altitude_m # APF için irtifa bilgisi de gönderilmeli
                 
                 # XBeePackage formatına uygun hale getiriyoruz (int * 1000000)
                 gps_package = XBeePackage(
-                    package_type="G", # Düzeltme: 'type' yerine 'package_type'
+                    package_type="G",
                     sender=self.DRONE_ID,
                     params={
                         "x": int(lat * 1000000),
-                        "y": int(lon * 1000000)
+                        "y": int(lon * 1000000),
+                        "a": int(alt * 100) # İrtifayı santimetre cinsinden gönderelim
                     }
                 )
                 self.xbee_controller.send(gps_package)
@@ -248,7 +294,7 @@ class DroneController(DroneConnection):
         """
         Gelen XBee paketlerini tipine göre işler.
         """
-        print("\n--- Gelen XBee Paketi İşleniyor... ---")
+        # print("\n--- Gelen XBee Paketi İşleniyor... ---") # Çok fazla çıktı olmaması için kapatıldı
         if "error" in package_data:
             print(f"  Paket işleme hatası: {package_data['error']}")
             if "raw_data_hex" in package_data:
@@ -261,16 +307,17 @@ class DroneController(DroneConnection):
         sender_id = package_data.get('s')
         params = package_data.get('p', {})
 
-        print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}")
+        # print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}") # Çok fazla çıktı olmaması için kapatıldı
 
         if package_type == "G":
             # Diğer dronların GPS verisi, APF için kullanılabilir
             if sender_id != self.DRONE_ID: # Kendi gönderdiğimiz paketi tekrar işlemeyelim
                 latitude = params.get('x') / 1000000.0 if params.get('x') is not None else None
                 longitude = params.get('y') / 1000000.0 if params.get('y') is not None else None
-                if latitude is not None and longitude is not None:
-                    self.apf_controller.update_other_drone_position(sender_id, latitude, longitude)
-                    print(f"    Diğer drone ({sender_id}) GPS verisi alındı: Lat={latitude}, Lon={longitude}")
+                altitude = params.get('a') / 100.0 if params.get('a') is not None else None # Santimetreden metreye çevir
+                if latitude is not None and longitude is not None and altitude is not None:
+                    self.apf_controller.update_other_drone_position(sender_id, latitude, longitude, altitude)
+                    # print(f"    Diğer drone ({sender_id}) GPS verisi alındı: Lat={latitude}, Lon={longitude}, Alt={altitude}")
         elif package_type == "H":
             print(f"    El sıkışma paketi alındı: Gönderen={sender_id}")
             # El sıkışma yanıtı gönderme mantığı eklenebilir
@@ -321,79 +368,123 @@ class DroneController(DroneConnection):
             print(f"    Bilinmeyen paket tipi alındı: {package_type}")
 
 
-    async def goto_waypoint(self, waypoint_id: str, relative_alt: float = 10.0) -> bool:
+    async def goto_waypoint(self, waypoint_id: str) -> bool: # relative_alt kaldırıldı, waypoint'ten alınacak
         """
-        Belirtilen waypoint ID'sine drone'u gönderir.
-        PID ve APF çarpışma önleme mantığı burada entegre edilebilir.
+        Belirtilen waypoint ID'sine drone'u PID ve APF tabanlı hız kontrolü ile gönderir.
         """
         waypoint = self.waypoint_manager.read(waypoint_id)
         if not waypoint:
             print(f"[DroneController]: Waypoint {waypoint_id} bulunamadı.")
             return False
 
-        print(f"[DroneController]: Waypoint {waypoint_id} hedefine gidiliyor: Lat={waypoint.lat}, Lon={waypoint.lon}, Alt={waypoint.alt}")
+        print(f"[DroneController]: Waypoint {waypoint_id} hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={waypoint.alt}m, Hed={waypoint.hed} derece")
 
         # Offboard modunu başlat
-        await self.drone.offboard.set_position_ned(
-            offboard.PositionNedYaw(0.0, 0.0, 0.0, 0.0))
+        # Başlangıçta drone'un mevcut konumunda kalması için sıfır hız komutu gönder
+        await self.drone.offboard.set_velocity_ned(
+            offboard.VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
         try:
             await self.drone.offboard.start()
+            print("[DroneController]: Offboard modu başlatıldı.")
         except offboard.OffboardError as error:
             print(f"[DroneController]: Offboard mod başlatılamadı: {error}")
             return False
 
-        # Hedefe ulaşana kadar döngü
-        TOLERANCE_M = 0.5 # Hedefe yakınlık toleransı (metre)
+        TOLERANCE_M = 1.0 # Hedefe yakınlık toleransı (metre)
         
-        async for position_info in self.drone.telemetry.position():
-            if self._stop_tasks_event.is_set():
-                print("[DroneController]: Görev iptal edildi, waypoint'e gitme durduruldu.")
-                break
+        # Yaklaşık 1 derece enlem ~ 111320 metre
+        lat_to_m = 111320.0
+        
+        # PID kontrolörlerini sıfırla
+        self.pid_north.prev_error = 0.0
+        self.pid_north.integral = 0.0
+        self.pid_east.prev_error = 0.0
+        self.pid_east.integral = 0.0
+        self.pid_down.prev_error = 0.0
+        self.pid_down.integral = 0.0
 
-            current_lat = position_info.latitude_deg
-            current_lon = position_info.longitude_deg
-            current_alt = position_info.absolute_altitude_m # Mutlak irtifa
-
-            target_alt_abs = waypoint.alt 
-
-            error_lat = waypoint.lat - current_lat
-            error_lon = waypoint.lon - current_lon
-            error_alt = target_alt_abs - current_alt
-            
-            dt = 0.1 # Her döngüde geçen süre
-            
-            correction_lat = self.pid_lat.calculate(error_lat, dt)
-            correction_lon = self.pid_lon.calculate(error_lon, dt)
-            correction_alt = self.pid_alt.calculate(error_alt, dt)
-            
-            apf_lat_force, apf_lon_force = self.apf_controller.calculate_avoidance_vector(
-                current_lat, current_lon, waypoint.lat, waypoint.lon
-            )
-            
-            command_lat = waypoint.lat + correction_lat + apf_lat_force
-            command_lon = waypoint.lon + correction_lon + apf_lon_force
-            command_alt = waypoint.alt + correction_alt 
-
-            await self.drone.action.goto_location(command_lat, command_lon, command_alt, waypoint.hed)
-            
-            distance_lat = abs(waypoint.lat - current_lat) * 111320 # Yaklaşık metre
-            distance_lon = abs(waypoint.lon - current_lon) * 111320 * abs(math.cos(math.radians(current_lat))) # Yaklaşık metre
-            horizontal_distance = (distance_lat**2 + distance_lon**2)**0.5
-            
-            if horizontal_distance < TOLERANCE_M and abs(target_alt_abs - current_alt) < TOLERANCE_M:
-                print(f"[DroneController]: Waypoint {waypoint_id} hedefine ulaşıldı.")
-                break
-
-            await asyncio.sleep(dt) # Kontrol döngüsü hızı
-
-        # Offboard modunu durdur
         try:
-            await self.drone.offboard.stop()
-        except offboard.OffboardError as error:
-            print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
-            return False
-        
-        return True
+            while not self._stop_tasks_event.is_set():
+                async for position_info in self.drone.telemetry.position():
+                    current_lat = position_info.latitude_deg
+                    current_lon = position_info.longitude_deg
+                    current_alt = position_info.absolute_altitude_m # Mutlak irtifa
+
+                    # Boylamı metreye çevirme faktörü (mevcut enleme göre değişir)
+                    lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
+
+                    # Hedefe olan farkı metre cinsinden hesapla (Kuzey, Doğu, Aşağı)
+                    # Hata = Hedef - Mevcut
+                    error_north_m = (waypoint.lat - current_lat) * lat_to_m
+                    error_east_m = (waypoint.lon - current_lon) * lon_to_m
+                    error_down_m = (waypoint.alt - current_alt) # Waypoint irtifası - mevcut irtifa
+
+                    # Hedefe olan 2D mesafeyi kontrol et
+                    horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
+                    
+                    # Hedefe ulaşıldı mı?
+                    if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
+                        print(f"[DroneController]: Waypoint {waypoint_id} hedefine ulaşıldı.")
+                        break # Döngüden çık
+
+                    dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
+
+                    # PID çıktılarını hesapla (hız komutları)
+                    # PID'ye mevcut hatayı veriyoruz, setpoint 0 olduğu için direkt hata değeri
+                    vel_north_pid = self.pid_north.calculate(error_north_m, dt)
+                    vel_east_pid = self.pid_east.calculate(error_east_m, dt)
+                    vel_down_pid = self.pid_down.calculate(error_down_m, dt) # İrtifa kontrolü için
+
+                    # APF'den gelen kaçınma vektörlerini hesapla
+                    avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
+                        current_lat, current_lon, current_alt
+                    )
+
+                    # Hedef hızı belirle (drone_speed'i kullanarak)
+                    # Normalize edilmiş yön vektörü * drone_speed
+                    target_heading_rad = math.atan2(error_east_m, error_north_m) # Hedefe doğru yön
+                    base_vel_north = self.drone_speed * math.cos(target_heading_rad)
+                    base_vel_east = self.drone_speed * math.sin(target_heading_rad)
+                    base_vel_down = 0.0 # İrtifa PID ile kontrol edildiği için sıfır
+
+                    # Nihai hız komutlarını hesapla: Temel hız + PID düzeltmeleri + APF kaçınması
+                    command_vel_north = base_vel_north + vel_north_pid + avoid_north
+                    command_vel_east = base_vel_east + vel_east_pid + avoid_east
+                    command_vel_down = base_vel_down + vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
+
+                    # Hız komutlarını sınırla (maksimum hızı aşmamak için)
+                    max_vel = 5.0 # Maksimum güvenli hız (m/s)
+                    current_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
+                    if current_speed > max_vel:
+                        scale_factor = max_vel / current_speed
+                        command_vel_north *= scale_factor
+                        command_vel_east *= scale_factor
+                        command_vel_down *= scale_factor
+
+                    # Drone'a hız komutunu gönder
+                    # Yaw'ı waypoint'in hedefine veya hareket yönüne ayarlayabiliriz.
+                    # Şimdilik waypoint'in hedef yönünü kullanalım.
+                    await self.drone.offboard.set_velocity_ned(
+                        offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, waypoint.hed)
+                    )
+                    # print(f"  Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}")
+
+                    await asyncio.sleep(dt) # Kontrol döngüsü hızı
+                else: # for position_info döngüsü break ile bitmezse (yani stop_tasks_event set olursa)
+                    break # while döngüsünden de çık
+
+        except asyncio.CancelledError:
+            print("[DroneController]: Waypoint'e gitme görevi iptal edildi.")
+        except Exception as e:
+            print(f"[DroneController]: Waypoint'e gitme görevinde hata: {e}")
+        finally:
+            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
+            try:
+                await self.drone.offboard.stop()
+                print("[DroneController]: Offboard modu durduruldu.")
+            except offboard.OffboardError as error:
+                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
+            return True # Görev tamamlandı veya iptal edildi
 
 
     def load_missions(self, missions_folder: str = "missions"):
@@ -476,7 +567,6 @@ class DroneController(DroneConnection):
 
         mission_class = mission_info['class']
         mission_name = mission_info['name']
-        # class_mission_id = mission_info['class_id'] # Eğer kullanmak isterseniz
 
         print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) başlatılıyor...")
         
@@ -488,7 +578,7 @@ class DroneController(DroneConnection):
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) tamamlandı.")
             # Görev tamamlandığında durum paketi gönderilebilir
             status_package = XBeePackage(
-                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
+                package_type="MS",
                 sender=self.DRONE_ID,
                 params={"status": "successful", "mission_id": mission_id}
             )
@@ -497,7 +587,7 @@ class DroneController(DroneConnection):
         except asyncio.CancelledError:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
             status_package = XBeePackage(
-                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
+                package_type="MS",
                 sender=self.DRONE_ID,
                 params={"status": "cancelled", "mission_id": mission_id}
             )
@@ -506,7 +596,7 @@ class DroneController(DroneConnection):
         except Exception as e:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
             status_package = XBeePackage(
-                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
+                package_type="MS",
                 sender=self.DRONE_ID,
                 params={"status": "failed", "mission_id": mission_id, "error": str(e)}
             )
@@ -554,7 +644,7 @@ async def main():
             print("  'arm'    : Drone'u arm et")
             print("  'takeoff': Drone'u havalandır (arm edilmiş olmalı)")
             print("  'land'   : Drone'u indir")
-            print("  'goto <waypoint_id>': Belirtilen waypointe git")
+            print("  'goto <waypoint_id>': Belirtilen waypointe git (PID/APF kontrollü)")
             print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
             print("  'rmwp <id>': Waypoint sil")
             print("  'sendgps': Manuel GPS paketi gönder (test)")
@@ -615,16 +705,18 @@ async def main():
                 async for position in drone_controller.drone.telemetry.position():
                     lat = position.latitude_deg
                     lon = position.longitude_deg
+                    alt = position.absolute_altitude_m
                     gps_package = XBeePackage(
-                        package_type="G", # Düzeltme: 'type' yerine 'package_type'
+                        package_type="G",
                         sender=drone_controller.DRONE_ID,
                         params={
                             "x": int(lat * 1000000),
-                            "y": int(lon * 1000000)
+                            "y": int(lon * 1000000),
+                            "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
                     drone_controller.xbee_controller.send(gps_package)
-                    print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}")
+                    print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
                     break
             elif command.startswith('run '):
                 parts = command.split()
