@@ -73,7 +73,7 @@ class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
         """
         Diğer dronların konumunu günceller.
         """
-        if drone_id != self.drone_id: # Kendi konumumuzu takip etmiyoruz
+        if drone_id != self.drone_id: # Kendi konumumuzu takip etmiyoru
             self.other_drone_positions[drone_id] = (lat, lon, alt)
             # print(f"APF: Drone {drone_id} konumu güncellendi: Lat={lat}, Lon={lon}, Alt={alt}")
 
@@ -183,6 +183,7 @@ class DroneController(DroneConnection):
         self._monitor_armed_state_task = asyncio.create_task(self._monitor_armed_state()) # Görev referansı tutuluyor
 
         # Görevleri yükle
+        print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
         self.load_missions()
         
         print("[DroneController]: Drone Controller hazır.")
@@ -312,7 +313,7 @@ class DroneController(DroneConnection):
             return
 
         package_type = package_data.get('t')
-        sender_id = package_data.get('s')
+        sender_id = package_data.get('s') # <-- Düzeltilen satır
         params = package_data.get('p', {})
 
         # print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}") # Çok fazla çıktı olmaması için kapatıldı
@@ -717,7 +718,7 @@ async def main():
                 else:
                     print("Kullanım: run <mission_id> [param1=value1 param2=value2 ...]")
             elif command == 'list_missions':
-                if drone_controller.missions: # Buradaki 'Missions' 'missions' olarak düzeltildi
+                if drone_controller.missions:
                     print("Yüklü Görevler:")
                     for mid, info in drone_controller.missions.items():
                         print(f"  - ID: {mid}, İsim: {info['name']}")
