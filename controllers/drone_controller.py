@@ -151,10 +151,9 @@ class DroneController(DroneConnection):
 
         # PID kontrolörleri (ayarlanmış değerler)
         # Yatay PID: Daha az agresif kp, dengeli ki, kd
-        self.pid_north = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5)  
-        # Dikey PID: İrtifa tutma için ayarlandı, daha az agresif kp (önceki 10.0 çok yüksekti)
-        # Yüksek integral_max, büyük irtifa hatalarını kapatmaya yardımcı olur
+        self.pid_north = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5)  
+        # Dikey PID: İrtifa tutma için ayarlandı
         self.pid_down = PIDController(kp=1.0, ki=0.01, kd=0.5, integral_max=10.0, integral_min=-10.0)  
 
         # Drone'un maksimum yatay hızı korunuyor
@@ -495,10 +494,16 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
 
                 # Hedefe ulaşıldı mı? (Yatay ve Dikey toleranslar)
-                if (horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M and
-                    math.sqrt(current_vel_north**2 + current_vel_east**2) < SPEED_TOLERANCE and abs(current_vel_down) < SPEED_TOLERANCE):
-                    print(f"[DroneController]: Hedef koordinatlara ulaşıldı ve hız yeterince düşük.")
-                    break
+                if horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M:
+                    # Drone'u hedef noktada sabit tutmaya çalış
+                    print(f"[DroneController]: Hedefe {horizontal_distance:.2f}m yatayda ve {abs(error_down_m):.2f}m dikeyde ulaşıldı. Sabitleniyor...")
+                    for _ in range(10): # 1 saniye (0.1s * 10) sabit kalmasını bekle
+                        await self.drone.offboard.set_velocity_ned(
+                            offboard.VelocityNedYaw(0.0, 0.0, 0.0, target_hed)
+                        )
+                        await asyncio.sleep(dt)
+                    print("[DroneController]: Drone sabitlendi. Görev tamamlandı.")
+                    break # Döngüden çık
 
                 dt = 0.1
 
@@ -694,7 +699,14 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return False
         finally:
+            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
+            try:
+                await self.drone.offboard.stop()
+                print("[DroneController]: Offboard modu durduruldu.")
+            except offboard.OffboardError as error:
+                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
             self.current_mission = None # Görev tamamlandığında veya başarısız olduğunda sıfırla
+            return True # Görev tamamlandı veya iptal edildi
 
 
 # --- Test için Ana Fonksiyon ---
