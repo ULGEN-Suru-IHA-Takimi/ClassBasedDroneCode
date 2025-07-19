@@ -9,11 +9,8 @@
 ## Örnek komutlar
 arm
 takeoff
-goto_coord 47.397606 8.543060 10.0 0
+goto_coord 47.398316 8.546406 10.0 0
 
-arm
-takeoff
-goto_coord 47.397626 8.543040 10.0 0
 
 ### Görev 0
 run 0 variable=Hello_world
