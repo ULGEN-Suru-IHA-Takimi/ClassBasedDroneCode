@@ -6,9 +6,9 @@ import time
 import json
 import os
 import importlib.util
+import math # math modülü eklendi
 from mavsdk import System, telemetry, offboard, action
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Kendi modüllerimizi import ediyoruz
 # Proje kök dizininden import etmek için sys.path'e ekleme yapılabilir
 # Ancak modüler yapıda olduğu için göreceli importlar tercih edilir.
@@ -405,10 +405,6 @@ class DroneController(DroneConnection):
             # Bu yüzden sadece farkların karekökünü almak yeterli değildir.
             # Ancak test amaçlı olarak, küçük mesafelerde bu yaklaşım bir fikir verebilir.
             
-            # Örnek: Basit bir mesafe kontrolü (daha doğru bir coğrafi mesafe hesaplaması gereklidir)
-            # Burada sadece lat/lon farkını kullanıyoruz, bu doğru bir mesafe değil.
-            # Gerçek bir uygulamada `geopy` gibi kütüphanelerle mesafe hesaplanmalıdır.
-            
             # Mesafe hesaplaması için basit bir placeholder:
             # distance_to_target = ((waypoint.lat - current_lat)**2 + (waypoint.lon - current_lon)**2)**0.5 * 111320 # Yaklaşık metreye çevirme
             # MavSDK'nın kendi `distance_to_waypoint` gibi bir metodu varsa o tercih edilmelidir.
@@ -567,7 +563,7 @@ class DroneController(DroneConnection):
 async def main():
     # Kullanıcıdan XBee portunu ve drone bağlantı adresini al
     print('XBee bağlantısı için port girin (örn: 0, 1, ... veya "default" için boş bırakın)')
-    input_xbee_port_str = input('/dev/ttyUSB? : ')
+    input_xbee_port_str = await asyncio.to_thread(input, '/dev/ttyUSB? : ') # await eklendi
 
     if input_xbee_port_str.strip() == "":
         xbee_port = "/dev/ttyUSB0"
@@ -580,7 +576,7 @@ async def main():
             xbee_port = "/dev/ttyUSB0"
 
     print('Drone bağlantısı için adres girin (örn: "udpin://0.0.0.0:14540" veya "default" için boş bırakın)')
-    input_drone_sys_address = input('Drone System Address: ')
+    input_drone_sys_address = await asyncio.to_thread(input, 'Drone System Address: ') # await eklendi
     if input_drone_sys_address.strip() == "":
         drone_sys_address = "udpin://0.0.0.0:14540"
     else:
@@ -613,7 +609,8 @@ async def main():
 
         # Kullanıcı komutlarını dinleyen döngü
         while True:
-            command = await asyncio.to_thread(input, "Komut girin: ").strip().lower()
+            # Buradaki hata düzeltildi: await asyncio.to_thread(input, ...) çağrısının sonucu üzerinde .strip().lower() uygulanmalı.
+            command = (await asyncio.to_thread(input, "Komut girin: ")).strip().lower()
 
             if command == 'q':
                 break
