@@ -398,73 +398,99 @@ class DroneController(DroneConnection):
         self.pid_down.integral = 0.0
 
         try:
+            # Telemetry akışını dış döngüde başlatıyoruz
+            position_async_iterator = self.drone.telemetry.position().__aiter__()
+
             while not self._stop_tasks_event.is_set():
-                async for position_info in self.drone.telemetry.position():
-                    current_lat = position_info.latitude_deg
-                    current_lon = position_info.longitude_deg
-                    current_alt = position_info.absolute_altitude_m # Mutlak irtifa
+                try:
+                    position_info = await position_async_iterator.__anext__() # Bir sonraki telemetri bilgisini al
+                except StopAsyncIteration:
+                    print("[DroneController]: Telemetry akışı sona erdi.")
+                    break # Akış biterse döngüden çık
+                except asyncio.CancelledError:
+                    raise # Görev iptal edilirse hatayı yukarıya fırlat
 
-                    # Boylamı metreye çevirme faktörü (mevcut enleme göre değişir)
-                    lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
+                current_lat = position_info.latitude_deg
+                current_lon = position_info.longitude_deg
+                current_alt = position_info.absolute_altitude_m # Mutlak irtifa
 
-                    # Hedefe olan farkı metre cinsinden hesapla (Kuzey, Doğu, Aşağı)
-                    # Hata = Hedef - Mevcut
-                    error_north_m = (target_lat - current_lat) * lat_to_m
-                    error_east_m = (target_lon - current_lon) * lon_to_m
-                    error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
+                # Boylamı metreye çevirme faktörü (mevcut enleme göre değişir)
+                lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
 
-                    # Hedefe olan 2D mesafeyi kontrol et
-                    horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
-                    
-                    # Hedefe ulaşıldı mı?
-                    if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
-                        print(f"[DroneController]: Hedef koordinatlara ulaşıldı.")
-                        break # Döngüden çık
+                # Hedefe olan farkı metre cinsinden hesapla (Kuzey, Doğu, Aşağı)
+                # Hata = Hedef - Mevcut
+                error_north_m = (target_lat - current_lat) * lat_to_m
+                error_east_m = (target_lon - current_lon) * lon_to_m
+                error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
 
-                    dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
+                # Hedefe olan 2D mesafeyi kontrol et
+                horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
+                
+                # Debugging logları
+                print(f"  [DEBUG] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
+                print(f"  [DEBUG] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
+                print(f"  [DEBUG] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
+                print(f"  [DEBUG] Yatay Mesafe: {horizontal_distance:.2f}m")
 
-                    # PID çıktılarını hesapla (hız komutları)
-                    # PID'ye mevcut hatayı veriyoruz, setpoint 0 olduğu için direkt hata değeri
-                    vel_north_pid = self.pid_north.calculate(error_north_m, dt)
-                    vel_east_pid = self.pid_east.calculate(error_east_m, dt)
-                    vel_down_pid = self.pid_down.calculate(error_down_m, dt) # İrtifa kontrolü için
+                # Hedefe ulaşıldı mı?
+                if horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M:
+                    print(f"[DroneController]: Hedef koordinatlara ulaşıldı.")
+                    break # Döngüden çık
 
-                    # APF'den gelen kaçınma vektörlerini hesapla
-                    avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
-                        current_lat, current_lon, current_alt
-                    )
+                dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
 
-                    # Hedef hızı belirle (drone_speed'i kullanarak)
-                    # Normalize edilmiş yön vektörü * drone_speed
+                # PID çıktılarını hesapla (hız komutları)
+                # PID'ye mevcut hatayı veriyoruz, setpoint 0 olduğu için direkt hata değeri
+                vel_north_pid = self.pid_north.calculate(error_north_m, dt)
+                vel_east_pid = self.pid_east.calculate(error_east_m, dt)
+                vel_down_pid = self.pid_down.calculate(error_down_m, dt) # İrtifa kontrolü için
+
+                # APF'den gelen kaçınma vektörlerini hesapla
+                avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
+                    current_lat, current_lon, current_alt
+                )
+
+                # Debugging logları
+                print(f"  [DEBUG] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
+                print(f"  [DEBUG] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
+
+
+                # Hedef hızı belirle (drone_speed'i kullanarak)
+                # Normalize edilmiş yön vektörü * drone_speed
+                # Hedefe doğru yönü hesapla
+                if horizontal_distance > 0.1: # Sıfıra bölme hatasını önlemek için
                     target_heading_rad = math.atan2(error_east_m, error_north_m) # Hedefe doğru yön
                     base_vel_north = self.drone_speed * math.cos(target_heading_rad)
                     base_vel_east = self.drone_speed * math.sin(target_heading_rad)
-                    base_vel_down = 0.0 # İrtifa PID ile kontrol edildiği için sıfır
+                else: # Hedefe çok yakınsa temel hızı sıfırla
+                    base_vel_north = 0.0
+                    base_vel_east = 0.0
+                
+                base_vel_down = 0.0 # İrtifa PID ile kontrol edildiği için sıfır
 
-                    # Nihai hız komutlarını hesapla: Temel hız + PID düzeltmeleri + APF kaçınması
-                    command_vel_north = base_vel_north + vel_north_pid + avoid_north
-                    command_vel_east = base_vel_east + vel_east_pid + avoid_east
-                    command_vel_down = base_vel_down + vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
+                # Nihai hız komutlarını hesapla: Temel hız + PID düzeltmeleri + APF kaçınması
+                command_vel_north = base_vel_north + vel_north_pid + avoid_north
+                command_vel_east = base_vel_east + vel_east_pid + avoid_east
+                command_vel_down = base_vel_down + vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
 
-                    # Hız komutlarını sınırla (maksimum hızı aşmamak için)
-                    max_vel = 5.0 # Maksimum güvenli hız (m/s)
-                    current_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
-                    if current_speed > max_vel:
-                        scale_factor = max_vel / current_speed
-                        command_vel_north *= scale_factor
-                        command_vel_east *= scale_factor
-                        command_vel_down *= scale_factor
+                # Hız komutlarını sınırla (maksimum hızı aşmamak için)
+                max_vel = 5.0 # Maksimum güvenli hız (m/s)
+                current_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
+                if current_command_speed > max_vel:
+                    scale_factor = max_vel / current_command_speed
+                    command_vel_north *= scale_factor
+                    command_vel_east *= scale_factor
+                    command_vel_down *= scale_factor
+                
+                print(f"  [DEBUG] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
 
-                    # Drone'a hız komutunu gönder
-                    # Yaw'ı hedef yöne ayarlayalım.
-                    await self.drone.offboard.set_velocity_ned(
-                        offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
-                    )
-                    # print(f"  Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}")
-
-                    await asyncio.sleep(dt) # Kontrol döngüsü hızı
-                else: # for position_info döngüsü break ile bitmezse (yani stop_tasks_event set olursa)
-                    break # while döngüsünden de çık
+                # Drone'a hız komutunu gönder
+                # Yaw'ı hedef yöne ayarlayalım.
+                await self.drone.offboard.set_velocity_ned(
+                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
+                )
+                
+                await asyncio.sleep(dt) # Kontrol döngüsü hızı
 
         except asyncio.CancelledError:
             print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
