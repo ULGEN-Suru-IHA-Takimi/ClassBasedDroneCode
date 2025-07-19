@@ -61,11 +61,6 @@ class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
         # Gerçek bir uygulamada, dronların hızları, yönleri ve sensör verileri de dikkate alınır.
         # Örneğin, her bir diğer drone için bir itme kuvveti hesaplanabilir ve toplanabilir.
         
-        # Örnek: Diğer dronlara 10 metreden yakınsa basit bir itme kuvveti uygula
-        # Bu sadece bir placeholder'dır ve gerçek bir çarpışma önleme algoritması değildir.
-        # Coğrafi koordinatlar arası mesafe hesaplaması (haversine formülü vb.) gereklidir.
-        # Basitlik adına, şimdilik sadece konsepti gösteriyoruz.
-        
         # for other_id, (other_lat, other_lon) in self.other_drone_positions.items():
         #     distance = calculate_distance(current_lat, current_lon, other_lat, other_lon)
         #     if distance < 10: # 10 metreden yakınsa
@@ -524,12 +519,13 @@ class DroneController(DroneConnection):
 
                     for name, obj in module.__dict__.items():
                         print(f"    [DroneController]: '{filename}' içinde bulunan obje: {name}, Tipi: {type(obj)}") # Debug print
+                        # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
                         if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
-                            # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
                             mission_id = name # Sınıf adını görev ID olarak kullan
                             self.missions[mission_id] = obj
                             print(f"  [DroneController]: Görev yüklendi: {mission_id} (Dosya: {filename})")
-                            break # Her dosyadan sadece bir görev sınıfı beklenir
+                            # break # Her dosyadan sadece bir görev sınıfı beklenirse bu satır aktif edilebilir
+                                    # Ancak birden fazla görev sınıfı tanımlanabilir, bu yüzden şimdilik kaldırdım.
                 except Exception as e:
                     print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
         
@@ -621,21 +617,25 @@ async def main():
             return
 
         print("\nDrone Controller başarıyla başlatıldı.")
-        print("Komutlar:")
-        print("  'arm'    : Drone'u arm et")
-        print("  'takeoff': Drone'u havalandır (arm edilmiş olmalı)")
-        print("  'land'   : Drone'u indir")
-        print("  'goto <waypoint_id>': Belirtilen waypointe git")
-        print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
-        print("  'rmwp <id>': Waypoint sil")
-        print("  'sendgps': Manuel GPS paketi gönder (test)")
-        print("  'run <mission_id>': Görev başlat")
-        print("  'list_missions': Yüklü görevleri listele")
-        print("  'q'      : Çıkış")
+        # Komut listesini gösteren yardımcı fonksiyon
+        def print_help():
+            print("\nKomutlar:")
+            print("  'arm'    : Drone'u arm et")
+            print("  'takeoff': Drone'u havalandır (arm edilmiş olmalı)")
+            print("  'land'   : Drone'u indir")
+            print("  'goto <waypoint_id>': Belirtilen waypointe git")
+            print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
+            print("  'rmwp <id>': Waypoint sil")
+            print("  'sendgps': Manuel GPS paketi gönder (test)")
+            print("  'run <mission_id> [param1=value1 param2=value2 ...]': Görev başlat")
+            print("  'list_missions': Yüklü görevleri listele")
+            print("  'help'   : Bu komut listesini gösterir")
+            print("  'q'      : Çıkış")
+        
+        print_help() # Başlangıçta komutları göster
 
         # Kullanıcı komutlarını dinleyen döngü
         while True:
-            # Buradaki hata düzeltildi: await asyncio.to_thread(input, ...) çağrısının sonucu üzerinde .strip().lower() uygulanmalı.
             command = (await asyncio.to_thread(input, "Komut girin: ")).strip().lower()
 
             if command == 'q':
@@ -727,8 +727,10 @@ async def main():
                         print(f"  - {mid}")
                 else:
                     print("Hiç görev yüklenemedi.")
+            elif command == 'help':
+                print_help()
             else:
-                print("Bilinmeyen komut.")
+                print("Bilinmeyen komut. 'help' yazarak komut listesini görebilirsiniz.")
 
     except Exception as e:
         print(f"Uygulama hatası: {e}")
