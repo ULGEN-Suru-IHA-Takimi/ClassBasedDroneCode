@@ -146,8 +146,9 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        self.pid_north = PIDController(kp=0.5, ki=0.01, kd=0.1) # Kuzey yönü için PID
-        self.pid_east = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Doğu yönü için PID
+        # GÜNCELLENDİ: PID kazançları daha düşük değerlere ayarlandı
+        self.pid_north = PIDController(kp=0.005, ki=0.0001, kd=0.05) # Kuzey yönü için PID
+        self.pid_east = PIDController(kp=0.005, ki=0.0001, kd=0.05)  # Doğu yönü için PID
         self.pid_down = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Aşağı yönü (irtifa) için PID
 
         self.drone_speed = 1.0 # Drone'un hedef hızı (m/s)
@@ -455,29 +456,29 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
 
 
-                # Hedef hızı belirle (drone_speed'i kullanarak)
-                # Normalize edilmiş yön vektörü * drone_speed
-                # Hedefe doğru yönü hesapla
-                if horizontal_distance > 0.1: # Sıfıra bölme hatasını önlemek için
-                    target_heading_rad = math.atan2(error_east_m, error_north_m) # Hedefe doğru yön
-                    base_vel_north = self.drone_speed * math.cos(target_heading_rad)
-                    base_vel_east = self.drone_speed * math.sin(target_heading_rad)
-                else: # Hedefe çok yakınsa temel hızı sıfırla
-                    base_vel_north = 0.0
-                    base_vel_east = 0.0
-                
-                base_vel_down = 0.0 # İrtifa PID ile kontrol edildiği için sıfır
-
-                # Nihai hız komutlarını hesapla: Temel hız + PID düzeltmeleri + APF kaçınması
-                command_vel_north = base_vel_north + vel_north_pid + avoid_north
-                command_vel_east = base_vel_east + vel_east_pid + avoid_east
-                command_vel_down = base_vel_down + vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
+                # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
+                command_vel_north = vel_north_pid + avoid_north
+                command_vel_east = vel_east_pid + avoid_east
+                command_vel_down = vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
 
                 # Hız komutlarını sınırla (maksimum hızı aşmamak için)
-                max_vel = 5.0 # Maksimum güvenli hız (m/s)
-                current_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
-                if current_command_speed > max_vel:
-                    scale_factor = max_vel / current_command_speed
+                # Yatay hız için kullanıcı tarafından belirlenen drone_speed'i maksimum limit olarak kullan
+                current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
+                if current_horizontal_command_speed > self.drone_speed:
+                    scale_factor = self.drone_speed / current_horizontal_command_speed
+                    command_vel_north *= scale_factor
+                    command_vel_east *= scale_factor
+                
+                # Dikey hız için de bir limit koyalım
+                max_vertical_vel = 1.0 # m/s (Örnek değer, ayarlanabilir)
+                if abs(command_vel_down) > max_vertical_vel:
+                    command_vel_down = math.copysign(max_vertical_vel, command_vel_down)
+
+                # Genel maksimum hız sınırı (drone'un fiziksel limitlerini aşmamak için)
+                overall_max_vel = 5.0 # m/s (Mutlak güvenlik limiti)
+                current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
+                if current_overall_command_speed > overall_max_vel:
+                    scale_factor = overall_max_vel / current_overall_command_speed
                     command_vel_north *= scale_factor
                     command_vel_east *= scale_factor
                     command_vel_down *= scale_factor
