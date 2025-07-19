@@ -23,31 +23,35 @@ from controllers.waypoint_controller import waypoints, Waypoint
 from controllers.mission_controller import Mission as MissionBase
 
 
-# PID-APF için basit bir placeholder (gerçek implementasyon çok daha karmaşıktır)
-# Çarpışma önleme için daha gelişmiş algoritmalar ve sensör verisi gereklidir.
 class PIDController:
     """
     Basit bir PID kontrolcüsü.
     """
-    def __init__(self, kp, ki, kd):
+    def __init__(self, kp, ki, kd, integral_max=1.0, integral_min=-1.0): # Integral windup limitleri eklendi
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.prev_error = 0.0
         self.integral = 0.0
-        self.setpoint = 0.0 # Hedef değer (örn: 0 hata)
+        self.integral_max = integral_max
+        self.integral_min = integral_min
 
-    def calculate(self, current_value, dt):
+    def calculate(self, error, dt): # Artık doğrudan hatayı alıyor
         """
         PID çıktısını hesaplar.
         Args:
-            current_value (float): Mevcut değer (örn: konum hatası).
+            error (float): Hedefe olan mevcut hata.
             dt (float): Son hesaplamadan bu yana geçen zaman.
         Returns:
             float: PID kontrol çıktısı (örn: hız komutu).
         """
-        error = self.setpoint - current_value
         self.integral += error * dt
+        # Integral windup önleme
+        if self.integral > self.integral_max:
+            self.integral = self.integral_max
+        elif self.integral < self.integral_min:
+            self.integral = self.integral_min
+
         derivative = (error - self.prev_error) / dt
         output = self.kp * error + self.ki * self.integral + self.kd * derivative
         self.prev_error = error
@@ -146,10 +150,10 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        # GÜNCELLENDİ: PID kazançları daha düşük değerlere ayarlandı
-        self.pid_north = PIDController(kp=0.005, ki=0.0001, kd=0.05) # Kuzey yönü için PID
-        self.pid_east = PIDController(kp=0.005, ki=0.0001, kd=0.05)  # Doğu yönü için PID
-        self.pid_down = PIDController(kp=0.5, ki=0.01, kd=0.1)  # Aşağı yönü (irtifa) için PID
+        # GÜNCELLENDİ: PID kazançları daha uygun değerlere ayarlandı
+        self.pid_north = PIDController(kp=0.1, ki=0.001, kd=0.05, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=0.1, ki=0.001, kd=0.05, integral_max=0.5, integral_min=-0.5)  
+        self.pid_down = PIDController(kp=0.8, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
 
         self.drone_speed = 1.0 # Drone'un hedef hızı (m/s)
 
