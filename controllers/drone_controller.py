@@ -20,7 +20,7 @@ from connect.drone_connection import DroneConnection
 from controllers.xbee_controller import XBeeController, XBeePackage
 from controllers.waypoint_controller import waypoints, Waypoint
 # Mission temel sınıfını doğrudan import ediyoruz
-from controllers.mission_controller import Mission as MissionBase # MissionBase olarak alias verdik
+from controllers.mission_controller import Mission as MissionBase
 
 
 # PID-APF için basit bir placeholder (gerçek implementasyon çok daha karmaşıktır)
@@ -47,7 +47,7 @@ class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
         self.other_drone_positions = {} # {drone_id: (lat, lon)}
 
     def update_other_drone_position(self, drone_id: str, lat: float, lon: float):
-        if drone_id != self.drone_id: # Kendi konumumuzu takip etmiyoruz
+        if drone_id != self.drone_id: # Kendi konumumuzu takip etmıyoruz
             self.other_drone_positions[drone_id] = (lat, lon)
             # print(f"APF: Drone {drone_id} konumu güncellendi: {lat}, {lon}")
 
@@ -86,7 +86,8 @@ class DroneController(DroneConnection):
         self.xbee_controller: XBeeController = None
         self.waypoint_manager = waypoints() # Waypoint'leri yönetecek sınıf
         self.current_mission = None # Aktif görevi tutar
-        self.missions = {} # Yüklenen görev sınıflarını tutar {mission_id: MissionClass}
+        # self.missions artık {filename_id: {'class': MissionClass, 'name': mission_name, 'class_id': actual_mission_id_from_class}} şeklinde olacak
+        self.missions = {} 
 
         self._gps_send_task = None
         self._xbee_receive_task = None
@@ -294,8 +295,15 @@ class DroneController(DroneConnection):
             print(f"    Görev emri alındı: Görev ID={mission_id}, Dronlar={drone_ids}, Formasyon={formation}, Waypointler={waypoint_ids}")
             # Kendi ID'miz görevden sorumlu dronlar arasında mı kontrol et
             if self.DRONE_ID in drone_ids:
-                self.required_confirmations = len(drone_ids) # Beklenen onay sayısı
-                await self.run_mission(mission_id, {"drone_ids": drone_ids, "formation": formation, "waypoint_ids": waypoint_ids})
+                # Burada mission_name'i bulup göndermemiz gerekecek
+                # Ancak O paketi sadece mission_id içerdiği için,
+                # bu drone'un kendi missions sözlüğünden mission_name'i alması daha mantıklı.
+                mission_info_for_run = self.missions.get(mission_id)
+                if mission_info_for_run:
+                    mission_name_for_run = mission_info_for_run['name']
+                    await self.run_mission(mission_id, {"drone_ids": drone_ids, "formation": formation, "waypoint_ids": waypoint_ids, "mission_name": mission_name_for_run})
+                else:
+                    print(f"    Hata: Görev ID {mission_id} için isim bilgisi bulunamadı. Görev çalıştırılamıyor.")
             else:
                 print(f"    Bu drone ({self.DRONE_ID}) görevden sorumlu değil.")
         elif package_type == "MC":
@@ -417,15 +425,13 @@ class DroneController(DroneConnection):
             
             # Mesafe hesaplaması için basit bir placeholder:
             # distance_to_target = ((waypoint.lat - current_lat)**2 + (waypoint.lon - current_lon)**2)**0.5 * 111320 # Yaklaşık metreye çevirme
-            # MavSDK'nın kendi `distance_to_waypoint` gibi bir metodu varsa o tercih edilmelidir.
+            # MavSDK'nın kendi `distance_to_point` gibi bir metodu varsa o tercih edilmelidir.
             # Şimdilik, hedef konuma yeterince yakın olup olmadığını kontrol etmek için basit bir eşik kullanacağız.
             
             # MAVSDK'nın `distance_to_point` metodunu kullanabiliriz (telemetry'de yok, ancak kendimiz hesaplayabiliriz).
             # Veya `goto_location` zaten hedefe ulaştığında tamamlanır.
             # `goto_location` asenkron bir çağrı olduğu için, bu döngü `goto_location`'ın kendisi tamamlanana kadar beklemeyecektir.
-            # Bu nedenle, `goto_location`'ı her döngüde çağırmak yerine, bir kez çağırıp tamamlanmasını beklemek daha mantıklı olabilir.
-            # Ancak PID/APF entegrasyonu için sürekli komut göndermek gerekir.
-            
+            # Bu nedenle, `goto_location`'ı her döngüde çağrı
             # Bu kısım, `goto_location`'ın nasıl kullanıldığına bağlı olarak değişebilir.
             # Eğer `goto_location`'ı sürekli olarak güncellenen PID/APF komutlarıyla kullanacaksak,
             # döngüde kalıp mesafeyi kontrol etmeye devam etmeliyiz.
@@ -458,15 +464,13 @@ class DroneController(DroneConnection):
     def load_missions(self, missions_folder: str = "missions"):
         """
         'missions' klasöründeki görev sınıflarını dinamik olarak yükler.
+        Görev ID'si olarak dosya adını kullanır (örn: '1.py' -> '1').
         """
-        # Mevcut dosyanın dizinini al (controllers/drone_controller.py)
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Proje kök dizinine git (controllers'ın bir üstü)
         project_root = os.path.dirname(current_dir)
-        # Görevler klasörünün tam yolu
         full_missions_path = os.path.join(project_root, missions_folder)
 
-        print(f"[DroneController]: Görev klasörü yolu: {full_missions_path}") # Debug print
+        print(f"[DroneController]: Görev klasörü yolu: {full_missions_path}")
 
         if not os.path.exists(full_missions_path):
             print(f"[DroneController]: Hata! '{full_missions_path}' görev klasörü bulunamadı.")
@@ -474,36 +478,16 @@ class DroneController(DroneConnection):
 
         print(f"[DroneController]: Görevler '{full_missions_path}' klasöründen yükleniyor...")
         
-        # MissionBase zaten dosyanın başında import edildiği için bu kısmı kaldırıyoruz.
-        # MissionBase = None 
-        # try:
-        #     spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
-        #     if spec is None:
-        #         print(f"[DroneController]: Hata! 'mission_controller.py' için spec oluşturulamadı.")
-        #         return
-            
-        #     mission_module = importlib.util.module_from_spec(spec)
-        #     spec.loader.exec_module(mission_module)
-            
-        #     MissionBase = getattr(mission_module, 'Mission', None)
-        #     if MissionBase is None:
-        #         print("[DroneController]: Hata! 'mission_controller.py' içinde 'Mission' sınıfı bulunamadı.")
-        #         return
-        #     print(f"[DroneController]: MissionBase sınıfı başarıyla yüklendi: {MissionBase}") # Debug print
-        # except Exception as e:
-        #     print(f"[DroneController]: Hata! Mission Controller yüklenirken sorun oluştu: {e}")
-        #     return
-
-
         for filename in os.listdir(full_missions_path):
             if filename.endswith(".py") and filename != "__init__.py":
-                module_name = filename[:-3] # .py uzantısını kaldır
+                # Dosya adını görev ID'si olarak kullanıyoruz
+                file_mission_id = filename[:-3] 
                 file_path = os.path.join(full_missions_path, filename)
                 
-                print(f"  [DroneController]: '{filename}' dosyası işleniyor...") # Debug print
+                print(f"  [DroneController]: '{filename}' dosyası işleniyor (Dosya ID: {file_mission_id})...")
 
                 try:
-                    spec = importlib.util.spec_from_file_location(module_name, file_path)
+                    spec = importlib.util.spec_from_file_location(f"mission_{file_mission_id}", file_path)
                     if spec is None:
                         print(f"  Uyarı: '{filename}' için spec oluşturulamadı, atlanıyor.")
                         continue
@@ -511,21 +495,31 @@ class DroneController(DroneConnection):
                     module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(module)
 
+                    found_mission_class = None
                     for name, obj in module.__dict__.items():
-                        print(f"    [DroneController]: '{filename}' içinde bulunan obje: {name}, Tipi: {type(obj)}") # Debug print
-                        if isinstance(obj, type):
-                            # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
-                            # MissionBase artık doğrudan import edildiği için, issubclass kontrolü doğru çalışmalı.
-                            is_subclass = issubclass(obj, MissionBase) # if MissionBase else False kaldırıldı
-                            print(f"      [DroneController]: Kontrol ediliyor: {name} issubclass(obj, MissionBase) -> {is_subclass}") # New debug print
-                            print(f"      [DroneController]: Kontrol ediliyor: obj is not MissionBase -> {obj is not MissionBase}") # New debug print
+                        # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
+                        if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
+                            found_mission_class = obj
+                            break # İlk bulunan geçerli görev sınıfını al
 
-                            if is_subclass and obj is not MissionBase:
-                                mission_id = name # Sınıf adını görev ID olarak kullan
-                                self.missions[mission_id] = obj
-                                print(f"  [DroneController]: Görev yüklendi: {mission_id} (Dosya: {filename})")
-                                # break # Her dosyadan sadece bir görev sınıfı beklenirse bu satır aktif edilebilir
-                                        # Ancak birden fazla görev sınıfı tanımlanabilir, bu yüzden şimdilik kaldırdım.
+                    if found_mission_class:
+                        # Sınıfın içindeki MISSION_ID ve mission_name özelliklerini alıyoruz
+                        class_mission_id = getattr(found_mission_class, 'MISSION_ID', None)
+                        mission_name = getattr(found_mission_class, 'mission_name', "Bilinmeyen Görev")
+
+                        # Dosya adı ID'si ile sınıfın içindeki ID'yi karşılaştırabiliriz (isteğe bağlı tutarlılık kontrolü)
+                        if class_mission_id and class_mission_id == file_mission_id:
+                            self.missions[file_mission_id] = {
+                                'class': found_mission_class, 
+                                'name': mission_name,
+                                'class_id': class_mission_id # Sınıfın kendi içindeki ID'yi de saklayabiliriz
+                            }
+                            print(f"  [DroneController]: Görev yüklendi: ID='{file_mission_id}', İsim='{mission_name}' (Dosya: {filename}, Sınıf: {found_mission_class.__name__})")
+                        else:
+                            print(f"  Uyarı: '{filename}' dosyasındaki '{found_mission_class.__name__}' sınıfının MISSION_ID ('{class_mission_id}') dosya adıyla ('{file_mission_id}') eşleşmiyor veya tanımlı değil. Bu görev yüklenmedi.")
+                    else:
+                        print(f"  Uyarı: '{filename}' dosyasında MissionBase'den türeyen geçerli bir görev sınıfı bulunamadı.")
+
                 except Exception as e:
                     print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
         
@@ -538,19 +532,27 @@ class DroneController(DroneConnection):
     async def run_mission(self, mission_id: str, params: dict) -> bool:
         """
         Belirtilen görev ID'sine sahip görevi başlatır.
+        mission_id burada dosya adından gelen ID'dir (örn: "1").
         """
-        mission_class = self.missions.get(mission_id)
-        if not mission_class:
+        mission_info = self.missions.get(mission_id)
+        if not mission_info:
             print(f"[DroneController]: Görev '{mission_id}' bulunamadı.")
             return False
 
-        print(f"[DroneController]: Görev '{mission_id}' başlatılıyor...")
-        self.current_mission = mission_class(self, params) # DroneController'ı ve parametreleri göreve geçir
+        mission_class = mission_info['class']
+        mission_name = mission_info['name']
+        # class_mission_id = mission_info['class_id'] # Eğer kullanmak isterseniz
+
+        print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) başlatılıyor...")
+        
+        # Görev sınıfına gerekli bilgileri (mission_id, mission_name ve diğer params) geçiriyoruz
+        # mission_id ve mission_name artık Mission.__init__ tarafından doğrudan bekleniyor.
+        self.current_mission = mission_class(self, mission_id, mission_name, params) 
         self.mission_confirmations.clear() # Yeni görev için onayları sıfırla
         
         try:
             await self.current_mission.start()
-            print(f"[DroneController]: Görev '{mission_id}' tamamlandı.")
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) tamamlandı.")
             # Görev tamamlandığında durum paketi gönderilebilir
             status_package = XBeePackage(
                 package_type="MS",
@@ -560,7 +562,7 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return True
         except asyncio.CancelledError:
-            print(f"[DroneController]: Görev '{mission_id}' iptal edildi.")
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
             status_package = XBeePackage(
                 package_type="MS",
                 sender=self.DRONE_ID,
@@ -569,9 +571,9 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return False
         except Exception as e:
-            print(f"[DroneController]: Görev '{mission_id}' çalıştırılırken hata oluştu: {e}")
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
             status_package = XBeePackage(
-                package_type="MS",
+                type="MS",
                 sender=self.DRONE_ID,
                 params={"status": "failed", "mission_id": mission_id, "error": str(e)}
             )
@@ -585,7 +587,7 @@ class DroneController(DroneConnection):
 async def main():
     # Kullanıcıdan XBee portunu ve drone bağlantı adresini al
     print('XBee bağlantısı için port girin (örn: 0, 1, ... veya "default" için boş bırakın)')
-    input_xbee_port_str = await asyncio.to_thread(input, '/dev/ttyUSB? : ') # await eklendi
+    input_xbee_port_str = await asyncio.to_thread(input, '/dev/ttyUSB? : ')
 
     if input_xbee_port_str.strip() == "":
         xbee_port = "/dev/ttyUSB0"
@@ -598,7 +600,7 @@ async def main():
             xbee_port = "/dev/ttyUSB0"
 
     print('Drone bağlantısı için adres girin (örn: "udpin://0.0.0.0:14540" veya "default" için boş bırakın)')
-    input_drone_sys_address = await asyncio.to_thread(input, 'Drone System Address: ') # await eklendi
+    input_drone_sys_address = await asyncio.to_thread(input, 'Drone System Address: ')
     if input_drone_sys_address.strip() == "":
         drone_sys_address = "udpin://0.0.0.0:14540"
     else:
@@ -609,15 +611,11 @@ async def main():
     try:
         await drone_controller.connect()
 
-        # Eğer XBee bağlantısı başarısız olursa çık
-        # Drone bağlantısı, drone_controller.connect() içinde zaten kontrol ediliyor.
-        # Eğer bu noktaya gelindiyse, drone bağlantısının başarılı olduğu varsayılır.
         if drone_controller.xbee_controller and not drone_controller.xbee_controller.connected:
             print("XBee bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
             return
 
         print("\nDrone Controller başarıyla başlatıldı.")
-        # Komut listesini gösteren yardımcı fonksiyon
         def print_help():
             print("\nKomutlar:")
             print("  'arm'    : Drone'u arm et")
@@ -627,14 +625,13 @@ async def main():
             print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
             print("  'rmwp <id>': Waypoint sil")
             print("  'sendgps': Manuel GPS paketi gönder (test)")
-            print("  'run <mission_id> [param1=value1 param2=value2 ...]': Görev başlat")
-            print("  'list_missions': Yüklü görevleri listele")
+            print("  'run <mission_id> [param1=value1 param2=value2 ...]': Görev başlat (ID ve İsim ile listelenir)")
+            print("  'list_missions': Yüklü görevleri ID ve İsimleri ile listeler")
             print("  'help'   : Bu komut listesini gösterir")
             print("  'q'      : Çıkış")
         
-        print_help() # Başlangıçta komutları göster
+        print_help()
 
-        # Kullanıcı komutlarını dinleyen döngü
         while True:
             command = (await asyncio.to_thread(input, "Komut girin: ")).strip().lower()
 
@@ -682,12 +679,11 @@ async def main():
                 else:
                     print("Kullanım: rmwp <id>")
             elif command == 'sendgps':
-                # Sadece test amaçlı manuel GPS paketi gönderme
                 async for position in drone_controller.drone.telemetry.position():
                     lat = position.latitude_deg
                     lon = position.longitude_deg
                     gps_package = XBeePackage(
-                        package_type="G",
+                        type="G",
                         sender=drone_controller.DRONE_ID,
                         params={
                             "x": int(lat * 1000000),
@@ -696,21 +692,17 @@ async def main():
                     )
                     drone_controller.xbee_controller.send(gps_package)
                     print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}")
-                    break # Sadece bir kez gönder
+                    break
             elif command.startswith('run '):
                 parts = command.split()
                 if len(parts) >= 2:
                     mission_id = parts[1]
-                    # Basit bir parametre ayrıştırma örneği
-                    # Gerçek uygulamada daha gelişmiş bir parser gerekebilir
                     mission_params = {}
                     if len(parts) > 2:
-                        # Örnek: run MyMission d=1,2,3 f=V wp=wp1,wp2
-                        # Basit bir key-value ayrıştırma
                         for param_str in parts[2:]:
                             if '=' in param_str:
                                 key, value = param_str.split('=', 1)
-                                if ',' in value: # Virgülle ayrılmış listeler için
+                                if ',' in value:
                                     mission_params[key] = value.split(',')
                                 else:
                                     mission_params[key] = value
@@ -723,8 +715,8 @@ async def main():
             elif command == 'list_missions':
                 if drone_controller.missions:
                     print("Yüklü Görevler:")
-                    for mid in drone_controller.missions.keys():
-                        print(f"  - {mid}")
+                    for mid, info in drone_controller.missions.items():
+                        print(f"  - ID: {mid}, İsim: {info['name']}")
                 else:
                     print("Hiç görev yüklenemedi.")
             elif command == 'help':
@@ -739,7 +731,5 @@ async def main():
         print("Uygulama sonlandırıldı.")
 
 if __name__ == "__main__":
-    # asyncio.run() Python 3.7+ gerektirir.
-    # Windows'ta bazen asyncio ile ilgili sorunlar olabilir, platform spesifik ayarlamalar gerekebilir.
     asyncio.run(main())
 
