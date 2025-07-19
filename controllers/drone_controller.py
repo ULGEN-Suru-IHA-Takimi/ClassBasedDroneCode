@@ -185,7 +185,8 @@ class DroneController(DroneConnection):
 
         # Görevleri yükle
         print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
-        self.load_missions() # Hata ayıklama çıktısı
+        print(f"[DroneController]: Attributes of self before load_missions: {dir(self)}") # Yeni hata ayıklama çıktısı
+        self.load_missions() 
         
         print("[DroneController]: Drone Controller hazır.")
 
@@ -365,10 +366,8 @@ class DroneController(DroneConnection):
             if self.current_mission and self.current_mission.mission_id == mission_id_confirm:
                 self.mission_confirmations.add(sender_id)
                 print(f"    Onaylar: {len(self.mission_confirmations)}/{self.required_confirmations}")
-                if len(self.mission_confirmations) >= self.required_confirmations:
-                    print(f"    Tüm onaylar alındı. Görev {mission_id_confirm} başlatılıyor!")
-                    if hasattr(self.current_mission, 'all_confirmed_event'):
-                        self.current_mission.all_confirmed_event.set()
+                if len(self.current_mission.all_confirmed_event):
+                    self.current_mission.all_confirmed_event.set()
         elif package_type == "MS":
             status = params.get('status', 'unknown')
             print(f"    Görev durumu alındı: Gönderen={sender_id}, Durum={status}")
