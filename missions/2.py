@@ -17,8 +17,9 @@ class CircleMission(Mission):
     MISSION_ID = "2"
     mission_name = "Daire Görevi"
 
-    def __init__(self, drone_controller, params: dict):
-        super().__init__(drone_controller, self.MISSION_ID, self.mission_name, params)
+    # BURASI DÜZELTİLDİ: __init__ metodu Mission temel sınıfının beklediği tüm parametreleri alacak şekilde güncellendi.
+    def __init__(self, drone_controller, mission_id: str, mission_name: str, params: dict):
+        super().__init__(drone_controller, mission_id, mission_name, params)
         self.drone_ids = params.get("drone_ids", [])
         self.center_wp_id = params.get("center_wp_id")
         self.radius_m = float(params.get("radius_m", 10.0)) # Varsayılan 10 metre
@@ -84,11 +85,9 @@ class CircleMission(Mission):
             new_lon = center_waypoint.lon + (self.radius_m / (111320.0 * math.cos(math.radians(center_waypoint.lat)))) * math.sin(angle)
             
             # Geçici bir waypoint oluşturup git
-            # Gerçek bir uygulamada, bu waypointler önceden tanımlı olabilir veya dinamik olarak yönetilebilir.
             temp_wp_id = f"circle_wp_{i}"
             print(f"[{self.mission_name} - ID:{self.mission_id}]: Geçici waypoint {temp_wp_id} hedefine gidiliyor: Lat={new_lat:.6f}, Lon={new_lon:.6f}, Alt={self.altitude_m}m")
             
-            # goto_waypoint yerine doğrudan goto_location kullanabiliriz
             await drone.action.goto_location(new_lat, new_lon, self.altitude_m, 0) # Yönü 0 olarak varsaydık
             await asyncio.sleep(2) # Her nokta arasında bekleme
 
