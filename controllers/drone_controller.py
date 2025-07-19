@@ -131,6 +131,7 @@ class DroneController(DroneConnection):
 
     def __init__(self, sys_address: str = "udpin://0.0.0.0:14540", xbee_port: str = "/dev/ttyUSB0"):
         super().__init__(sys_address)
+        print(f"[DroneController]: Initializing DroneController instance: {self}") # Hata ayıklama çıktısı
         self.xbee_port = xbee_port
         self.xbee_controller: XBeeController = None
         self.waypoint_manager = waypoints() # Waypoint'leri yönetecek sınıf
@@ -184,7 +185,7 @@ class DroneController(DroneConnection):
 
         # Görevleri yükle
         print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
-        self.load_missions()
+        self.load_missions() # Hata ayıklama çıktısı
         
         print("[DroneController]: Drone Controller hazır.")
 
@@ -313,7 +314,7 @@ class DroneController(DroneConnection):
             return
 
         package_type = package_data.get('t')
-        sender_id = package_data.get('s') # <-- Düzeltilen satır
+        sender_id = package_data.get('s') # <-- Buradaki yazım hatası düzeltildi
         params = package_data.get('p', {})
 
         # print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}") # Çok fazla çıktı olmaması için kapatıldı
@@ -465,7 +466,7 @@ class DroneController(DroneConnection):
                     position_info = await position_async_iterator.__anext__()
                     velocity_info = await velocity_async_iterator.__anext__()
                 except StopAsyncIteration:
-                    print("[DroneController]: Telemetry akışı sona erdi (yatay faz).")
+                    print("[DroneController]: Telemetry akışı sona erdi (yatay fazı).")
                     break
                 except asyncio.CancelledError:
                     raise
