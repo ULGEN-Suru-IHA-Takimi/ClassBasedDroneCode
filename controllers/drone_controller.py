@@ -717,7 +717,7 @@ async def main():
                 else:
                     print("Kullanım: run <mission_id> [param1=value1 param2=value2 ...]")
             elif command == 'list_missions':
-                if drone_controller.missions:
+                if drone_controller.missions: # Buradaki 'Missions' 'missions' olarak düzeltildi
                     print("Yüklü Görevler:")
                     for mid, info in drone_controller.missions.items():
                         print(f"  - ID: {mid}, İsim: {info['name']}")
