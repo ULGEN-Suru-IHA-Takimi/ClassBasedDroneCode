@@ -2,6 +2,7 @@
 
 import asyncio
 from controllers.mission_controller import Mission
+from controllers.xbee_controller import XBeePackage # XBeePackage doğrudan import edildi
 
 class SimpleWaypointMission(Mission):
     """
@@ -16,9 +17,8 @@ class SimpleWaypointMission(Mission):
     MISSION_ID = "1"
     mission_name = "Basit Waypoint Görevi (Güncellenmiş)"
 
-    def __init__(self, drone_controller, params: dict):
-        # Mission temel sınıfının yapıcı metodunu çağırırken mission_id ve mission_name'i iletiyoruz.
-        super().__init__(drone_controller, self.MISSION_ID, self.mission_name, params)
+    def __init__(self, drone_controller, mission_id: str, mission_name: str, params: dict):
+        super().__init__(drone_controller, mission_id, mission_name, params)
         
         self.drone_ids = params.get("drone_ids", [])
         self.waypoint_ids = params.get("waypoint_ids", [])
@@ -56,7 +56,8 @@ class SimpleWaypointMission(Mission):
             return False
 
         # Görev onay paketi gönder
-        confirm_package = self.drone_controller.xbee_controller.XBeePackage(
+        # Düzeltme: XBeePackage doğrudan import edildiği için 'xbee_controller' ön eki kaldırıldı.
+        confirm_package = XBeePackage( 
             package_type="MC",
             sender=my_drone_id,
             params={"id": self.mission_id}
@@ -82,8 +83,6 @@ class SimpleWaypointMission(Mission):
 
             print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint {wp_id} hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={target_altitude}m, Hed={waypoint.hed} derece")
             
-            # goto_location MAVSDK'da daha yüksek seviye bir fonksiyondur ve genellikle tercih edilir.
-            # DroneController'daki goto_waypoint metodu zaten bunu kullanıyor ve PID/APF entegrasyonu sağlıyor.
             if not await self.drone_controller.goto_waypoint(wp_id):
                 print(f"[{self.mission_name} - ID:{self.mission_id}]: Waypoint {wp_id} hedefine ulaşılamadı. Görev iptal ediliyor.")
                 await drone.action.land() # Güvenli iniş

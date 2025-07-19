@@ -3,6 +3,7 @@
 import asyncio
 import math
 from controllers.mission_controller import Mission
+from controllers.xbee_controller import XBeePackage # XBeePackage doğrudan import edildi
 
 class CircleMission(Mission):
     """
@@ -17,7 +18,6 @@ class CircleMission(Mission):
     MISSION_ID = "2"
     mission_name = "Daire Görevi"
 
-    # BURASI DÜZELTİLDİ: __init__ metodu Mission temel sınıfının beklediği tüm parametreleri alacak şekilde güncellendi.
     def __init__(self, drone_controller, mission_id: str, mission_name: str, params: dict):
         super().__init__(drone_controller, mission_id, mission_name, params)
         self.drone_ids = params.get("drone_ids", [])
@@ -51,7 +51,8 @@ class CircleMission(Mission):
             return False
 
         # Görev onay paketi gönder
-        confirm_package = self.drone_controller.xbee_controller.XBeePackage(
+        # Düzeltme: XBeePackage doğrudan import edildiği için 'xbee_controller' ön eki kaldırıldı.
+        confirm_package = XBeePackage( 
             package_type="MC",
             sender=my_drone_id,
             params={"id": self.mission_id}

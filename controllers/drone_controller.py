@@ -17,7 +17,7 @@ from mavsdk import System, telemetry, offboard, action
 
 # Kendi modüllerimizi import ediyoruz
 from connect.drone_connection import DroneConnection
-from controllers.xbee_controller import XBeeController, XBeePackage
+from controllers.xbee_controller import XBeeController, XBeePackage # XBeePackage buraya da import edildi
 from controllers.waypoint_controller import waypoints, Waypoint
 # Mission temel sınıfını doğrudan import ediyoruz
 from controllers.mission_controller import Mission as MissionBase
@@ -209,7 +209,7 @@ class DroneController(DroneConnection):
                 
                 # XBeePackage formatına uygun hale getiriyoruz (int * 1000000)
                 gps_package = XBeePackage(
-                    package_type="G",
+                    package_type="G", # Düzeltme: 'type' yerine 'package_type'
                     sender=self.DRONE_ID,
                     params={
                         "x": int(lat * 1000000),
@@ -295,9 +295,6 @@ class DroneController(DroneConnection):
             print(f"    Görev emri alındı: Görev ID={mission_id}, Dronlar={drone_ids}, Formasyon={formation}, Waypointler={waypoint_ids}")
             # Kendi ID'miz görevden sorumlu dronlar arasında mı kontrol et
             if self.DRONE_ID in drone_ids:
-                # Burada mission_name'i bulup göndermemiz gerekecek
-                # Ancak O paketi sadece mission_id içerdiği için,
-                # bu drone'un kendi missions sözlüğünden mission_name'i alması daha mantıklı.
                 mission_info_for_run = self.missions.get(mission_id)
                 if mission_info_for_run:
                     mission_name_for_run = mission_info_for_run['name']
@@ -315,7 +312,6 @@ class DroneController(DroneConnection):
                 print(f"    Onaylar: {len(self.mission_confirmations)}/{self.required_confirmations}")
                 if len(self.mission_confirmations) >= self.required_confirmations:
                     print(f"    Tüm onaylar alındı. Görev {mission_id_confirm} başlatılıyor!")
-                    # Görevi başlatma sinyali gönderilebilir
                     if hasattr(self.current_mission, 'all_confirmed_event'):
                         self.current_mission.all_confirmed_event.set()
         elif package_type == "MS":
@@ -347,11 +343,6 @@ class DroneController(DroneConnection):
             return False
 
         # Hedefe ulaşana kadar döngü
-        # Bu kısım PID ve APF entegrasyonu için basitleştirilmiştir.
-        # Gerçek bir uygulamada, sürekli konum güncellemeleri ve kontrol döngüsü gerekir.
-        
-        # Basit bir döngü ile hedefe gitme
-        # PID ve APF burada konum komutlarını etkileyecek
         TOLERANCE_M = 0.5 # Hedefe yakınlık toleransı (metre)
         
         async for position_info in self.drone.telemetry.position():
@@ -363,84 +354,28 @@ class DroneController(DroneConnection):
             current_lon = position_info.longitude_deg
             current_alt = position_info.absolute_altitude_m # Mutlak irtifa
 
-            # Hedef irtifa (göreceli irtifa + kalkış irtifası)
-            target_alt_abs = waypoint.alt # Waypoint'teki irtifa zaten mutlak olabilir, kontrol et.
-                                          # Eğer waypoint.alt göreceli ise, home_altitude'u eklemek gerekir.
-                                          # MAVSDK'da genellikle relative_alt kullanılır.
-                                          # Şimdilik waypoint.alt'ı mutlak kabul edelim.
+            target_alt_abs = waypoint.alt 
 
-            # Hedef ve mevcut konum arası hata hesaplaması
-            # Basit bir mesafe hesaplaması (gerçekte daha hassas coğrafi hesaplama gerekir)
-            # Bu hatalar PID'ye beslenir
             error_lat = waypoint.lat - current_lat
             error_lon = waypoint.lon - current_lon
             error_alt = target_alt_abs - current_alt
             
-            # PID çıktıları (hız veya ivme komutları olarak düşünülebilir)
-            # dt değeri sabit bir zaman adımı olarak alınabilir (örn: 0.1 saniye)
             dt = 0.1 # Her döngüde geçen süre
             
-            # PID ile hız komutları hesapla (basit bir örnek)
-            # Bu değerler, offboard.set_velocity_ned() veya set_position_ned() ile kullanılabilir.
-            # Burada offboard.set_position_ned() kullanıldığı için, PID çıktısını doğrudan konum farkına ekleyebiliriz.
-            
-            # PID'den gelen düzeltmeler
             correction_lat = self.pid_lat.calculate(error_lat, dt)
             correction_lon = self.pid_lon.calculate(error_lon, dt)
             correction_alt = self.pid_alt.calculate(error_alt, dt)
             
-            # APF'den gelen çarpışma önleme vektörleri
             apf_lat_force, apf_lon_force = self.apf_controller.calculate_avoidance_vector(
                 current_lat, current_lon, waypoint.lat, waypoint.lon
             )
-
-            # Nihai hedef konum ayarlaması (PID ve APF ile)
-            # Bu kısım, PID ve APF çıktılarının nasıl birleştirileceğine bağlıdır.
-            # Genellikle PID hız veya ivme komutları üretirken, APF de bir kuvvet veya hız vektörü üretir.
-            # Burada basitleştirilmiş bir konum düzeltmesi yapıyoruz.
             
-            # Hedef konumda küçük ayarlamalar yaparak APF etkisini gösteriyoruz
             command_lat = waypoint.lat + correction_lat + apf_lat_force
             command_lon = waypoint.lon + correction_lon + apf_lon_force
-            command_alt = waypoint.alt + correction_alt # İrtifa için APF şimdilik düşünülmüyor
+            command_alt = waypoint.alt + correction_alt 
 
-            # MAVSDK offboard komutunu gönder
-            # MAVSDK'da goto_location daha yüksek seviye bir fonksiyondur ve genellikle tercih edilir.
-            # set_position_ned daha düşük seviye kontrol için kullanılır.
-            # Burada goto_location kullanmak daha uygun olacaktır.
             await self.drone.action.goto_location(command_lat, command_lon, command_alt, waypoint.hed)
-
-
-            # Hedefe ulaşıldı mı kontrolü (basit mesafe kontrolü)
-            # Gerçek bir uygulamada, hedef konuma yeterince yaklaşıldığında döngüden çıkılır.
-            # MAVSDK'nın kendi konum telemetrisini kullanarak mesafeyi hesaplayın.
             
-            # Basit Öklid mesafesi (coğrafi koordinatlar için uygun değil, sadece örnek)
-            # Gerçek bir mesafe hesaplaması için haversine veya Vincenty formülleri kullanılmalıdır.
-            # Şimdilik basit bir yaklaşım:
-            # Yaklaşık 1 derece enlem ~ 111 km
-            # Yaklaşık 1 derece boylam ~ 111 * cos(latitude) km
-            # Bu yüzden sadece farkların karekökünü almak yeterli değildir.
-            # Ancak test amaçlı olarak, küçük mesafelerde bu yaklaşım bir fikir verebilir.
-            
-            # Mesafe hesaplaması için basit bir placeholder:
-            # distance_to_target = ((waypoint.lat - current_lat)**2 + (waypoint.lon - current_lon)**2)**0.5 * 111320 # Yaklaşık metreye çevirme
-            # MavSDK'nın kendi `distance_to_point` gibi bir metodu varsa o tercih edilmelidir.
-            # Şimdilik, hedef konuma yeterince yakın olup olmadığını kontrol etmek için basit bir eşik kullanacağız.
-            
-            # MAVSDK'nın `distance_to_point` metodunu kullanabiliriz (telemetry'de yok, ancak kendimiz hesaplayabiliriz).
-            # Veya `goto_location` zaten hedefe ulaştığında tamamlanır.
-            # `goto_location` asenkron bir çağrı olduğu için, bu döngü `goto_location`'ın kendisi tamamlanana kadar beklemeyecektir.
-            # Bu nedenle, `goto_location`'ı her döngüde çağrı
-            # Bu kısım, `goto_location`'ın nasıl kullanıldığına bağlı olarak değişebilir.
-            # Eğer `goto_location`'ı sürekli olarak güncellenen PID/APF komutlarıyla kullanacaksak,
-            # döngüde kalıp mesafeyi kontrol etmeye devam etmeliyiz.
-            
-            # Mevcut yaklaşımda, `goto_location` her döngüde çağrıldığından,
-            # hedefe ulaşma kontrolünü manuel olarak yapmamız gerekiyor.
-            
-            # Basit bir mesafe kontrolü (doğruluk için Haversine formülü önerilir)
-            # Bu sadece test amaçlı bir yaklaşımdır.
             distance_lat = abs(waypoint.lat - current_lat) * 111320 # Yaklaşık metre
             distance_lon = abs(waypoint.lon - current_lon) * 111320 * abs(math.cos(math.radians(current_lat))) # Yaklaşık metre
             horizontal_distance = (distance_lat**2 + distance_lon**2)**0.5
@@ -545,8 +480,6 @@ class DroneController(DroneConnection):
 
         print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) başlatılıyor...")
         
-        # Görev sınıfına gerekli bilgileri (mission_id, mission_name ve diğer params) geçiriyoruz
-        # mission_id ve mission_name artık Mission.__init__ tarafından doğrudan bekleniyor.
         self.current_mission = mission_class(self, mission_id, mission_name, params) 
         self.mission_confirmations.clear() # Yeni görev için onayları sıfırla
         
@@ -555,7 +488,7 @@ class DroneController(DroneConnection):
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) tamamlandı.")
             # Görev tamamlandığında durum paketi gönderilebilir
             status_package = XBeePackage(
-                package_type="MS",
+                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
                 sender=self.DRONE_ID,
                 params={"status": "successful", "mission_id": mission_id}
             )
@@ -564,7 +497,7 @@ class DroneController(DroneConnection):
         except asyncio.CancelledError:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
             status_package = XBeePackage(
-                package_type="MS",
+                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
                 sender=self.DRONE_ID,
                 params={"status": "cancelled", "mission_id": mission_id}
             )
@@ -573,7 +506,7 @@ class DroneController(DroneConnection):
         except Exception as e:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
             status_package = XBeePackage(
-                type="MS",
+                package_type="MS", # Düzeltme: 'type' yerine 'package_type'
                 sender=self.DRONE_ID,
                 params={"status": "failed", "mission_id": mission_id, "error": str(e)}
             )
@@ -683,7 +616,7 @@ async def main():
                     lat = position.latitude_deg
                     lon = position.longitude_deg
                     gps_package = XBeePackage(
-                        type="G",
+                        package_type="G", # Düzeltme: 'type' yerine 'package_type'
                         sender=drone_controller.DRONE_ID,
                         params={
                             "x": int(lat * 1000000),
