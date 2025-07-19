@@ -149,12 +149,13 @@ class DroneController(DroneConnection):
         self.mission_confirmations = set() 
         self.required_confirmations = 0 # Görev için beklenen onay sayısı
 
-        # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
-        # GÜNCELLENDİ: Yatay PID kp düşürüldü, kd düşürüldü
+        # PID kontrolörleri (ayarlanmış değerler)
+        # Yatay PID: Daha az agresif kp, dengeli ki, kd
         self.pid_north = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5) 
         self.pid_east = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5)  
-        # GÜNCELLENDİ: Dikey PID kp artırıldı, kd artırıldı, integral_max artırıldı
-        self.pid_down = PIDController(kp=10.0, ki=0.01, kd=2.0, integral_max=20.0, integral_min=-20.0)  
+        # Dikey PID: İrtifa tutma için ayarlandı, daha az agresif kp (önceki 10.0 çok yüksekti)
+        # Yüksek integral_max, büyük irtifa hatalarını kapatmaya yardımcı olur
+        self.pid_down = PIDController(kp=1.0, ki=0.01, kd=0.5, integral_max=10.0, integral_min=-10.0)  
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
@@ -377,6 +378,7 @@ class DroneController(DroneConnection):
         """
         Belirtilen koordinatlara PID ve APF tabanlı hız kontrolü ile drone'u gönderir.
         Bu fonksiyon, goto_waypoint tarafından dahili olarak kullanılır.
+        Önce hedef irtifaya ulaşır, sonra yatayda hareket ederken irtifayı korur.
         """
         print(f"[DroneController]: Hedef koordinatlara gidiliyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
 
@@ -391,7 +393,9 @@ class DroneController(DroneConnection):
             print(f"[DroneController]: Offboard mod başlatılamadı: {error}")
             return False
 
-        TOLERANCE_M = 1.0 # Hedefe yakınlık toleransı (metre)
+        TOLERANCE_M = 1.0 # Yatay hedefe yakınlık toleransı (metre)
+        ALT_TOLERANCE_M = 0.5 # İrtifa toleransı (metre)
+        SPEED_TOLERANCE = 0.5 # Hız toleransı (m/s)
         
         # Yaklaşık 1 derece enlem ~ 111320 metre
         lat_to_m = 111320.0
@@ -405,67 +409,100 @@ class DroneController(DroneConnection):
         self.pid_down.integral = 0.0
 
         try:
-            # Telemetry akışını dış döngüde başlatıyoruz
             position_async_iterator = self.drone.telemetry.position().__aiter__()
-            # Velocity akışını da başlatıyoruz (debug için)
             velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
 
+            # --- FAZ 1: Hedef irtifaya ulaş ---
+            print("[DroneController]: Hedef irtifaya çıkılıyor/iniliyor...")
+            while not self._stop_tasks_event.is_set():
+                try:
+                    position_info = await position_async_iterator.__anext__()
+                    velocity_info = await velocity_async_iterator.__anext__()
+                except StopAsyncIteration:
+                    print("[DroneController]: Telemetry akışı sona erdi (irtifa fazı).")
+                    break
+                except asyncio.CancelledError:
+                    raise
+
+                current_alt = position_info.absolute_altitude_m
+                current_vel_down = velocity_info.down_m_s
+
+                error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
+
+                print(f"  [DEBUG-İrtifa Fazı] Mevcut Alt: {current_alt:.2f}m, Hedef Alt: {target_alt:.2f}m, Hata D: {error_down_m:.2f}m, Mevcut Hız D: {current_vel_down:.2f}m/s")
+
+                if abs(error_down_m) < ALT_TOLERANCE_M and abs(current_vel_down) < SPEED_TOLERANCE:
+                    print("[DroneController]: Hedef irtifaya ulaşıldı ve stabil.")
+                    break
+
+                dt = 0.1
+                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
+                
+                # Dikey hızı sınırla
+                max_vertical_vel = 5.0 # m/s
+                if abs(vel_down_pid) > max_vertical_vel:
+                    vel_down_pid = math.copysign(max_vertical_vel, vel_down_pid)
+
+                # Sadece dikey hız komutu gönder, yatayda sabit kal
+                await self.drone.offboard.set_velocity_ned(
+                    offboard.VelocityNedYaw(0.0, 0.0, vel_down_pid, target_hed)
+                )
+                await asyncio.sleep(dt)
+
+            # --- FAZ 2: Hedef irtifada yatayda hareket et ---
+            print("[DroneController]: Yatay harekete başlanıyor, irtifa korunacak.")
+            # Yatay PID'leri sıfırla (irtifa fazında kullanılmadıkları için)
+            self.pid_north.prev_error = 0.0
+            self.pid_north.integral = 0.0
+            self.pid_east.prev_error = 0.0
+            self.pid_east.integral = 0.0
+            # Dikey PID'nin integralini sıfırlama, irtifa tutmaya devam etsin
+            # self.pid_down.integral = 0.0 # Yorum satırı yapıldı, tutmaya devam etmeli
 
             while not self._stop_tasks_event.is_set():
                 try:
-                    position_info = await position_async_iterator.__anext__() # Bir sonraki telemetri bilgisini al
-                    velocity_info = await velocity_async_iterator.__anext__() # Bir sonraki hız bilgisini al
+                    position_info = await position_async_iterator.__anext__()
+                    velocity_info = await velocity_async_iterator.__anext__()
                 except StopAsyncIteration:
-                    print("[DroneController]: Telemetry akışı sona erdi.")
-                    break # Akış biterse döngüden çık
+                    print("[DroneController]: Telemetry akışı sona erdi (yatay faz).")
+                    break
                 except asyncio.CancelledError:
-                    raise # Görev iptal edilirse hatayı yukarıya fırlat
+                    raise
 
                 current_lat = position_info.latitude_deg
                 current_lon = position_info.longitude_deg
-                current_alt = position_info.absolute_altitude_m # Mutlak irtifa
+                current_alt = position_info.absolute_altitude_m
 
                 current_vel_north = velocity_info.north_m_s
                 current_vel_east = velocity_info.east_m_s
                 current_vel_down = velocity_info.down_m_s
 
-
-                # Boylamı metreye çevirme faktörü (mevcut enleme göre değişir)
                 lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
 
-                # Hedefe olan farkı metre cinsinden hesapla (Kuzey, Doğu, Aşağı)
-                # Hata = Hedef - Mevcut
+                # Yatay hatalar
                 error_north_m = (target_lat - current_lat) * lat_to_m
                 error_east_m = (target_lon - current_lon) * lon_to_m
-                error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
+                
+                # Dikey hata (irtifayı korumak için)
+                error_down_m = (target_alt - current_alt)
 
-                # Hedefe olan 2D mesafeyi kontrol et
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
-                # Debugging logları
-                print(f"  [DEBUG] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
-                print(f"  [DEBUG] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
-                print(f"  [DEBUG] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
-                print(f"  [DEBUG] Yatay Mesafe: {horizontal_distance:.2f}m")
-                print(f"  [DEBUG] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
 
-
-                # Hedefe ulaşıldı mı?
-                # Sadece mesafeye değil, hıza da bakarak durma koşulunu iyileştir
-                current_horizontal_speed = math.sqrt(current_vel_north**2 + current_vel_east**2)
-                current_vertical_speed = abs(current_vel_down)
-
-                if (horizontal_distance < TOLERANCE_M and abs(error_down_m) < TOLERANCE_M and
-                    current_horizontal_speed < 0.5 and current_vertical_speed < 0.5): # Hız toleransı eklendi
+                # Hedefe ulaşıldı mı? (Yatay ve Dikey toleranslar)
+                if (horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M and
+                    math.sqrt(current_vel_north**2 + current_vel_east**2) < SPEED_TOLERANCE and abs(current_vel_down) < SPEED_TOLERANCE):
                     print(f"[DroneController]: Hedef koordinatlara ulaşıldı ve hız yeterince düşük.")
-                    break # Döngüden çık
+                    break
 
-                dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
+                dt = 0.1
 
                 # PID çıktılarını hesapla (hız komutları)
-                # DİKKAT: Dikey kontrol için, pozitif error_down_m (hedef yukarıda) durumunda,
-                # drone'un YUKARI gitmesi gerekir, bu da NED 'Down' ekseninde NEGATİF hıza karşılık gelir.
-                # Bu nedenle, pid_down.calculate metoduna -error_down_m gönderiyoruz.
                 vel_north_pid = self.pid_north.calculate(error_north_m, dt)
                 vel_east_pid = self.pid_east.calculate(error_east_m, dt)
                 vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
@@ -475,33 +512,29 @@ class DroneController(DroneConnection):
                     current_lat, current_lon, current_alt
                 )
 
-                # Debugging logları
-                print(f"  [DEBUG] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
-                print(f"  [DEBUG] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
 
                 # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
                 command_vel_north = vel_north_pid + avoid_north
                 command_vel_east = vel_east_pid + avoid_east
-                command_vel_down = vel_down_pid + avoid_down # Bu artık yukarı hareket için negatif olacak
+                command_vel_down = vel_down_pid + avoid_down # Dikey PID'den gelen komut + APF
 
                 # Ham D komutunu (sınırlamadan önce) yazdır
-                print(f"  [DEBUG] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
 
-                # Hız komutlarını sınırla (maksimum hızı aşmamak için)
-                # Yatay hız için kullanıcı tarafından belirlenen drone_speed'i maksimum limit olarak kullan
+                # Hız komutlarını sınırla
                 current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
                 if current_horizontal_command_speed > self.drone_speed:
                     scale_factor = self.drone_speed / current_horizontal_command_speed
                     command_vel_north *= scale_factor
                     command_vel_east *= scale_factor
                 
-                # Dikey hız için de bir limit koyalım
-                max_vertical_vel = 5.0 # m/s (Örnek değer, ayarlanabilir)
+                max_vertical_vel = 5.0 # m/s
                 if abs(command_vel_down) > max_vertical_vel:
                     command_vel_down = math.copysign(max_vertical_vel, command_vel_down)
 
-                # Genel maksimum hız sınırı (drone'un fiziksel limitlerini aşmamak için)
-                overall_max_vel = 5.0 # m/s (Mutlak güvenlik limiti)
+                overall_max_vel = 5.0 # m/s
                 current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
                 if current_overall_command_speed > overall_max_vel:
                     scale_factor = overall_max_vel / current_overall_command_speed
@@ -509,15 +542,13 @@ class DroneController(DroneConnection):
                     command_vel_east *= scale_factor
                     command_vel_down *= scale_factor
                 
-                print(f"  [DEBUG] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
 
-                # Drone'a hız komutunu gönder
-                # Yaw'ı hedef yöne ayarlayalım.
                 await self.drone.offboard.set_velocity_ned(
                     offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
                 )
                 
-                await asyncio.sleep(dt) # Kontrol döngüsü hızı
+                await asyncio.sleep(dt)
 
         except asyncio.CancelledError:
             print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
