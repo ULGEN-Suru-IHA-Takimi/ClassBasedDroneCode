@@ -6,8 +6,8 @@ import time
 import json
 import os
 import importlib.util
-import math # math modülü eklendi
-import sys # sys modülü eklendi
+import math
+import sys
 
 # Projenin kök dizinini Python yoluna ekle
 # Bu, 'connect' ve 'controllers' gibi kardeş dizinlerdeki modüllerin bulunmasını sağlar.
@@ -19,9 +19,9 @@ from mavsdk import System, telemetry, offboard, action
 from connect.drone_connection import DroneConnection
 from controllers.xbee_controller import XBeeController, XBeePackage
 from controllers.waypoint_controller import waypoints, Waypoint
+# Mission temel sınıfını doğrudan import ediyoruz
+from controllers.mission_controller import Mission as MissionBase # MissionBase olarak alias verdik
 
-# Missions klasöründen görevleri dinamik yüklemek için kullanılacak
-# from missions.mission_controller import Mission # Bu dosya henüz oluşturulmadı, sonra eklenecek
 
 # PID-APF için basit bir placeholder (gerçek implementasyon çok daha karmaşıktır)
 # Çarpışma önleme için daha gelişmiş algoritmalar ve sensör verisi gereklidir.
@@ -474,28 +474,25 @@ class DroneController(DroneConnection):
 
         print(f"[DroneController]: Görevler '{full_missions_path}' klasöründen yükleniyor...")
         
-        # mission_controller.py'dan Mission base sınıfını import et
-        mission_controller_path = os.path.join(current_dir, "mission_controller.py")
-        print(f"[DroneController]: Mission Controller yolu: {mission_controller_path}") # Debug print
-
-        MissionBase = None
-        try:
-            spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
-            if spec is None:
-                print(f"[DroneController]: Hata! 'mission_controller.py' için spec oluşturulamadı.")
-                return
+        # MissionBase zaten dosyanın başında import edildiği için bu kısmı kaldırıyoruz.
+        # MissionBase = None 
+        # try:
+        #     spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
+        #     if spec is None:
+        #         print(f"[DroneController]: Hata! 'mission_controller.py' için spec oluşturulamadı.")
+        #         return
             
-            mission_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mission_module)
+        #     mission_module = importlib.util.module_from_spec(spec)
+        #     spec.loader.exec_module(mission_module)
             
-            MissionBase = getattr(mission_module, 'Mission', None)
-            if MissionBase is None:
-                print("[DroneController]: Hata! 'mission_controller.py' içinde 'Mission' sınıfı bulunamadı.")
-                return
-            print(f"[DroneController]: MissionBase sınıfı başarıyla yüklendi: {MissionBase}") # Debug print
-        except Exception as e:
-            print(f"[DroneController]: Hata! Mission Controller yüklenirken sorun oluştu: {e}")
-            return
+        #     MissionBase = getattr(mission_module, 'Mission', None)
+        #     if MissionBase is None:
+        #         print("[DroneController]: Hata! 'mission_controller.py' içinde 'Mission' sınıfı bulunamadı.")
+        #         return
+        #     print(f"[DroneController]: MissionBase sınıfı başarıyla yüklendi: {MissionBase}") # Debug print
+        # except Exception as e:
+        #     print(f"[DroneController]: Hata! Mission Controller yüklenirken sorun oluştu: {e}")
+        #     return
 
 
         for filename in os.listdir(full_missions_path):
@@ -518,7 +515,8 @@ class DroneController(DroneConnection):
                         print(f"    [DroneController]: '{filename}' içinde bulunan obje: {name}, Tipi: {type(obj)}") # Debug print
                         if isinstance(obj, type):
                             # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
-                            is_subclass = issubclass(obj, MissionBase) if MissionBase else False
+                            # MissionBase artık doğrudan import edildiği için, issubclass kontrolü doğru çalışmalı.
+                            is_subclass = issubclass(obj, MissionBase) # if MissionBase else False kaldırıldı
                             print(f"      [DroneController]: Kontrol ediliyor: {name} issubclass(obj, MissionBase) -> {is_subclass}") # New debug print
                             print(f"      [DroneController]: Kontrol ediliyor: obj is not MissionBase -> {obj is not MissionBase}") # New debug print
 
