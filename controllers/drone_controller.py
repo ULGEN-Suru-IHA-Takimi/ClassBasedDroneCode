@@ -7,7 +7,8 @@ import json
 import os
 import importlib.util
 from mavsdk import System, telemetry, offboard, action
-
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Kendi modüllerimizi import ediyoruz
 # Proje kök dizininden import etmek için sys.path'e ekleme yapılabilir
 # Ancak modüler yapıda olduğu için göreceli importlar tercih edilir.
@@ -563,7 +564,7 @@ async def main():
         await drone_controller.connect()
 
         # Eğer drone veya XBee bağlantısı başarısız olursa çık
-        if not drone_controller.drone.is_connected or (drone_controller.xbee_controller and not drone_controller.xbee_controller.connected):
+        if not await drone_controller.drone.is_connected() or (drone_controller.xbee_controller and not drone_controller.xbee_controller.connected):
             print("Bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
             return
 
