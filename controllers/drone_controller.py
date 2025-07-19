@@ -478,10 +478,7 @@ class DroneController(DroneConnection):
         mission_controller_path = os.path.join(current_dir, "mission_controller.py")
         print(f"[DroneController]: Mission Controller yolu: {mission_controller_path}") # Debug print
 
-        if not os.path.exists(mission_controller_path):
-            print(f"[DroneController]: Hata! 'mission_controller.py' bulunamadı. Görevler yüklenemiyor.")
-            return
-        
+        MissionBase = None
         try:
             spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
             if spec is None:
@@ -519,13 +516,18 @@ class DroneController(DroneConnection):
 
                     for name, obj in module.__dict__.items():
                         print(f"    [DroneController]: '{filename}' içinde bulunan obje: {name}, Tipi: {type(obj)}") # Debug print
-                        # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
-                        if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
-                            mission_id = name # Sınıf adını görev ID olarak kullan
-                            self.missions[mission_id] = obj
-                            print(f"  [DroneController]: Görev yüklendi: {mission_id} (Dosya: {filename})")
-                            # break # Her dosyadan sadece bir görev sınıfı beklenirse bu satır aktif edilebilir
-                                    # Ancak birden fazla görev sınıfı tanımlanabilir, bu yüzden şimdilik kaldırdım.
+                        if isinstance(obj, type):
+                            # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
+                            is_subclass = issubclass(obj, MissionBase) if MissionBase else False
+                            print(f"      [DroneController]: Kontrol ediliyor: {name} issubclass(obj, MissionBase) -> {is_subclass}") # New debug print
+                            print(f"      [DroneController]: Kontrol ediliyor: obj is not MissionBase -> {obj is not MissionBase}") # New debug print
+
+                            if is_subclass and obj is not MissionBase:
+                                mission_id = name # Sınıf adını görev ID olarak kullan
+                                self.missions[mission_id] = obj
+                                print(f"  [DroneController]: Görev yüklendi: {mission_id} (Dosya: {filename})")
+                                # break # Her dosyadan sadece bir görev sınıfı beklenirse bu satır aktif edilebilir
+                                        # Ancak birden fazla görev sınıfı tanımlanabilir, bu yüzden şimdilik kaldırdım.
                 except Exception as e:
                     print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
         
