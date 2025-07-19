@@ -154,7 +154,7 @@ class DroneController(DroneConnection):
         self.pid_north = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5) 
         self.pid_east = PIDController(kp=0.1, ki=0.002, kd=0.5, integral_max=0.5, integral_min=-0.5)  
         # GÜNCELLENDİ: Dikey PID kp artırıldı, kd artırıldı, integral_max artırıldı
-        self.pid_down = PIDController(kp=3.0, ki=0.01, kd=1.0, integral_max=5.0, integral_min=-1.0)  
+        self.pid_down = PIDController(kp=10.0, ki=0.01, kd=2.0, integral_max=20.0, integral_min=-20.0)  
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
@@ -479,11 +479,13 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
                 print(f"  [DEBUG] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
 
-
                 # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
                 command_vel_north = vel_north_pid + avoid_north
                 command_vel_east = vel_east_pid + avoid_east
                 command_vel_down = vel_down_pid + avoid_down # Bu artık yukarı hareket için negatif olacak
+
+                # Ham D komutunu (sınırlamadan önce) yazdır
+                print(f"  [DEBUG] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
 
                 # Hız komutlarını sınırla (maksimum hızı aşmamak için)
                 # Yatay hız için kullanıcı tarafından belirlenen drone_speed'i maksimum limit olarak kullan
