@@ -7,12 +7,15 @@ import json
 import os
 import importlib.util
 import math # math modülü eklendi
+import sys # sys modülü eklendi
+
+# Projenin kök dizinini Python yoluna ekle
+# Bu, 'connect' ve 'controllers' gibi kardeş dizinlerdeki modüllerin bulunmasını sağlar.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from mavsdk import System, telemetry, offboard, action
 
 # Kendi modüllerimizi import ediyoruz
-# Proje kök dizininden import etmek için sys.path'e ekleme yapılabilir
-# Ancak modüler yapıda olduğu için göreceli importlar tercih edilir.
-# Bu dosya 'controllers' içinde olduğundan, 'connect' ve 'controllers' aynı seviyede.
 from connect.drone_connection import DroneConnection
 from controllers.xbee_controller import XBeeController, XBeePackage
 from controllers.waypoint_controller import waypoints, Waypoint
@@ -92,6 +95,7 @@ class DroneController(DroneConnection):
 
         self._gps_send_task = None
         self._xbee_receive_task = None
+        self._monitor_armed_state_task = None # Armed durumu izleme görevi için referans
         self._drone_armed_event = asyncio.Event() # Drone'un armed olup olmadığını takip eder
         self._stop_tasks_event = asyncio.Event() # Tüm async görevleri durdurmak için
 
@@ -126,7 +130,7 @@ class DroneController(DroneConnection):
         self._xbee_receive_task = asyncio.create_task(self._xbee_receive_loop())
 
         # Drone'un armed durumunu takip eden görevi başlat
-        asyncio.create_task(self._monitor_armed_state())
+        self._monitor_armed_state_task = asyncio.create_task(self._monitor_armed_state()) # Görev referansı tutuluyor
 
         # Görevleri yükle
         self.load_missions()
@@ -152,6 +156,12 @@ class DroneController(DroneConnection):
             try: await self._xbee_receive_task
             except asyncio.CancelledError: pass
         
+        # _monitor_armed_state_task'ı da iptal et ve bekle
+        if self._monitor_armed_state_task and not self._monitor_armed_state_task.done():
+            self._monitor_armed_state_task.cancel()
+            try: await self._monitor_armed_state_task
+            except asyncio.CancelledError: pass
+
         # XBee Controller'ı kapat
         if self.xbee_controller:
             self.xbee_controller.disconnect()
@@ -164,22 +174,27 @@ class DroneController(DroneConnection):
     async def _monitor_armed_state(self) -> None:
         """Drone'un armed durumunu izler ve GPS gönderme görevini başlatır/durdurur."""
         print("[DroneController]: Drone armed durumu izleniyor...")
-        async for is_armed in self.drone.telemetry.armed():
-            if self._stop_tasks_event.is_set():
-                break # Kapatma sinyali gelirse döngüden çık
+        try:
+            async for is_armed in self.drone.telemetry.armed():
+                if self._stop_tasks_event.is_set():
+                    break # Kapatma sinyali gelirse döngüden çık
 
-            if is_armed and not self._drone_armed_event.is_set():
-                print("[DroneController]: Drone armed edildi. GPS veri gönderimi başlatılıyor.")
-                self._drone_armed_event.set()
-                if not self._gps_send_task or self._gps_send_task.done():
-                    self._gps_send_task = asyncio.create_task(self._send_gps_data_loop())
-            elif not is_armed and self._drone_armed_event.is_set():
-                print("[DroneController]: Drone disarm edildi. GPS veri gönderimi durduruluyor.")
-                self._drone_armed_event.clear()
-                if self._gps_send_task and not self._gps_send_task.done():
-                    self._gps_send_task.cancel()
-                    try: await self._gps_send_task
-                    except asyncio.CancelledError: pass
+                if is_armed and not self._drone_armed_event.is_set():
+                    print("[DroneController]: Drone armed edildi. GPS veri gönderimi başlatılıyor.")
+                    self._drone_armed_event.set()
+                    if not self._gps_send_task or self._gps_send_task.done():
+                        self._gps_send_task = asyncio.create_task(self._send_gps_data_loop())
+                elif not is_armed and self._drone_armed_event.is_set():
+                    print("[DroneController]: Drone disarm edildi. GPS veri gönderimi durduruluyor.")
+                    self._drone_armed_event.clear()
+                    if self._gps_send_task and not self._gps_send_task.done():
+                        self._gps_send_task.cancel()
+                        try: await self._gps_send_task
+                        except asyncio.CancelledError: pass
+        except asyncio.CancelledError:
+            print("[DroneController]: Armed durumu izleme görevi iptal edildi.")
+        except Exception as e:
+            print(f"[DroneController]: Armed durumu izleme görevinde hata: {e}")
         print("[DroneController]: Armed durumu izleme görevi durduruldu.")
 
 
