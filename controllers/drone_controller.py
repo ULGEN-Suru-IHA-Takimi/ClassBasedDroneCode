@@ -151,8 +151,8 @@ class DroneController(DroneConnection):
 
         # PID kontrolörleri (örnek değerler, ayarlanması gerekir)
         # GÜNCELLENDİ: Yatay PID kp düşürüldü, ki düşürüldü, kd artırıldı
-        self.pid_north = PIDController(kp=0.4, ki=0.002, kd=0.6, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=0.4, ki=0.002, kd=0.6, integral_max=0.5, integral_min=-0.5)  
+        self.pid_north = PIDController(kp=0.2, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5) 
+        self.pid_east = PIDController(kp=0.2, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5)  
         # Dikey PID kazançları korunuyor
         self.pid_down = PIDController(kp=0.5, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
 
@@ -495,7 +495,7 @@ class DroneController(DroneConnection):
                 
                 # Dikey hız için de bir limit koyalım
                 # GÜNCELLENDİ: Dikey hız limiti artırıldı
-                max_vertical_vel = 3.0 # m/s (Örnek değer, ayarlanabilir)
+                max_vertical_vel = 5.0 # m/s (Örnek değer, ayarlanabilir)
                 if abs(command_vel_down) > max_vertical_vel:
                     command_vel_down = math.copysign(max_vertical_vel, command_vel_down)
 
