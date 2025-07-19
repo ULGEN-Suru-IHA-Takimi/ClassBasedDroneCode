@@ -57,14 +57,6 @@ class CircleMission(Mission):
             sender=my_drone_id,
             params={"id": self.mission_id}
         )
-        xbee.send(confirm_package)
-        print(f"[{self.mission_name} - ID:{self.mission_id}]: Görev onay paketi gönderildi: {self.mission_id}")
-
-        # Tüm dronlardan onay bekle
-        if not await self.wait_for_all_confirmations():
-            print(f"[{self.mission_name} - ID:{self.mission_id}]: Görev başlatılamadı, tüm onaylar alınamadı.")
-            await drone.action.land()
-            return False
 
         # Merkez waypoint'i al
         center_waypoint = self.drone_controller.waypoint_manager.read(self.center_wp_id)
