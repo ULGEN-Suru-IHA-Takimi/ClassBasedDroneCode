@@ -337,15 +337,13 @@ class DroneController(DroneConnection):
         elif package_type == "O":
             mission_id = sender_id
             drone_ids = params.get('d', [])
-            formation = params.get('f', 'None')
-            waypoint_ids = params.get('wp', [])
-            print(f"    Görev emri alındı: Görev ID={mission_id}, Dronlar={drone_ids}, Formasyon={formation}, Waypointler={waypoint_ids}")
+            print(f"    Görev emri alındı: {params}")
             # Kendi ID'miz görevden sorumlu dronlar arasında mı kontrol et
             if self.DRONE_ID in drone_ids:
                 mission_info_for_run = self.missions.get(mission_id)
                 if mission_info_for_run:
                     mission_name_for_run = mission_info_for_run['name']
-                    await self.run_mission(mission_id, {"drone_ids": drone_ids, "formation": formation, "waypoint_ids": waypoint_ids, "mission_name": mission_name_for_run})
+                    await self.run_mission(mission_id, params)
                 else:
                     print(f"    Hata: Görev ID {mission_id} için isim bilgisi bulunamadı. Görev çalıştırılamıyor.")
             else:
