@@ -153,7 +153,8 @@ class DroneController(DroneConnection):
         # GÜNCELLENDİ: PID kazançları daha uygun değerlere ayarlandı
         self.pid_north = PIDController(kp=0.1, ki=0.001, kd=0.05, integral_max=0.5, integral_min=-0.5) 
         self.pid_east = PIDController(kp=0.1, ki=0.001, kd=0.05, integral_max=0.5, integral_min=-0.5)  
-        self.pid_down = PIDController(kp=0.8, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
+        # GÜNCELLENDİ: Dikey PID kp değeri düşürüldü ve integral limitleri ayarlandı
+        self.pid_down = PIDController(kp=0.5, ki=0.05, kd=0.2, integral_max=1.0, integral_min=-1.0)  
 
         self.drone_speed = 1.0 # Drone'un hedef hızı (m/s)
 
@@ -445,10 +446,12 @@ class DroneController(DroneConnection):
                 dt = 0.1 # Kontrol döngüsü zaman adımı (saniye)
 
                 # PID çıktılarını hesapla (hız komutları)
-                # PID'ye mevcut hatayı veriyoruz, setpoint 0 olduğu için direkt hata değeri
+                # DİKKAT: Dikey kontrol için, pozitif error_down_m (hedef yukarıda) durumunda,
+                # drone'un YUKARI gitmesi gerekir, bu da NED 'Down' ekseninde NEGATİF hıza karşılık gelir.
+                # Bu nedenle, pid_down.calculate metoduna -error_down_m gönderiyoruz.
                 vel_north_pid = self.pid_north.calculate(error_north_m, dt)
                 vel_east_pid = self.pid_east.calculate(error_east_m, dt)
-                vel_down_pid = self.pid_down.calculate(error_down_m, dt) # İrtifa kontrolü için
+                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
 
                 # APF'den gelen kaçınma vektörlerini hesapla
                 avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
@@ -463,7 +466,7 @@ class DroneController(DroneConnection):
                 # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
                 command_vel_north = vel_north_pid + avoid_north
                 command_vel_east = vel_east_pid + avoid_east
-                command_vel_down = vel_down_pid + avoid_down # Negatif aşağı = yukarı hareket
+                command_vel_down = vel_down_pid + avoid_down # Bu artık yukarı hareket için negatif olacak
 
                 # Hız komutlarını sınırla (maksimum hızı aşmamak için)
                 # Yatay hız için kullanıcı tarafından belirlenen drone_speed'i maksimum limit olarak kullan
@@ -760,14 +763,14 @@ async def main():
                     alt = position.absolute_altitude_m
                     gps_package = XBeePackage(
                         package_type="G",
-                        sender=drone_controller.DRONE_ID,
+                        sender=self.DRONE_ID,
                         params={
                             "x": int(lat * 1000000),
                             "y": int(lon * 1000000),
                             "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
-                    drone_controller.xbee_controller.send(gps_package)
+                    self.xbee_controller.send(gps_package)
                     print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
                     break
             elif command.startswith('run '):
