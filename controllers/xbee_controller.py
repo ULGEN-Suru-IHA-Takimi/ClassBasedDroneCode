@@ -158,7 +158,6 @@ class XBeeController:
 
         with self.queue_lock:
             self.send_queue.append((time.time(), package, remote_xbee_addr_hex))
-            print(f"Paket gönderim kuyruğuna eklendi. Tipi: {package.package_type}")
 
     def _receive_data_callback(self, xbee_message):
         """XBee cihazından veri geldiğinde çağrılan geri çağırma fonksiyonu."""
@@ -167,7 +166,6 @@ class XBeeController:
         if hasattr(xbee_message, 'remote_device') and xbee_message.remote_device:
             try:
                 remote_address_64bit = xbee_message.remote_device.get_64bit_addr().address.hex()
-                print(f"Paket geldi: Boyut={len(data)}, Kaynak={remote_address_64bit}")
             except Exception as e:
                 print(f"Uyarı: Uzak cihaz adres bilgisi alınamadı (geri çağırma içinde): {e}")
                 pass
