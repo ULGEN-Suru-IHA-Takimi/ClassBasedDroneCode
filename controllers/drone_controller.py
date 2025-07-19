@@ -471,37 +471,48 @@ class DroneController(DroneConnection):
         # Görevler klasörünün tam yolu
         full_missions_path = os.path.join(project_root, missions_folder)
 
+        print(f"[DroneController]: Görev klasörü yolu: {full_missions_path}") # Debug print
+
         if not os.path.exists(full_missions_path):
-            print(f"[DroneController]: '{full_missions_path}' görev klasörü bulunamadı.")
+            print(f"[DroneController]: Hata! '{full_missions_path}' görev klasörü bulunamadı.")
             return
 
         print(f"[DroneController]: Görevler '{full_missions_path}' klasöründen yükleniyor...")
         
         # mission_controller.py'dan Mission base sınıfını import et
         mission_controller_path = os.path.join(current_dir, "mission_controller.py")
+        print(f"[DroneController]: Mission Controller yolu: {mission_controller_path}") # Debug print
+
         if not os.path.exists(mission_controller_path):
-            print(f"[DroneController]: 'mission_controller.py' bulunamadı. Görevler yüklenemiyor.")
+            print(f"[DroneController]: Hata! 'mission_controller.py' bulunamadı. Görevler yüklenemiyor.")
             return
         
-        spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
-        if spec is None:
-            print(f"[DroneController]: 'mission_controller.py' için spec oluşturulamadı.")
+        try:
+            spec = importlib.util.spec_from_file_location("mission_controller", mission_controller_path)
+            if spec is None:
+                print(f"[DroneController]: Hata! 'mission_controller.py' için spec oluşturulamadı.")
+                return
+            
+            mission_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mission_module)
+            
+            MissionBase = getattr(mission_module, 'Mission', None)
+            if MissionBase is None:
+                print("[DroneController]: Hata! 'mission_controller.py' içinde 'Mission' sınıfı bulunamadı.")
+                return
+            print(f"[DroneController]: MissionBase sınıfı başarıyla yüklendi: {MissionBase}") # Debug print
+        except Exception as e:
+            print(f"[DroneController]: Hata! Mission Controller yüklenirken sorun oluştu: {e}")
             return
-        
-        mission_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mission_module)
-        
-        # Mission base sınıfını al
-        MissionBase = getattr(mission_module, 'Mission', None)
-        if MissionBase is None:
-            print("[DroneController]: 'mission_controller.py' içinde 'Mission' sınıfı bulunamadı.")
-            return
+
 
         for filename in os.listdir(full_missions_path):
             if filename.endswith(".py") and filename != "__init__.py":
                 module_name = filename[:-3] # .py uzantısını kaldır
                 file_path = os.path.join(full_missions_path, filename)
                 
+                print(f"  [DroneController]: '{filename}' dosyası işleniyor...") # Debug print
+
                 try:
                     spec = importlib.util.spec_from_file_location(module_name, file_path)
                     if spec is None:
@@ -512,12 +523,12 @@ class DroneController(DroneConnection):
                     spec.loader.exec_module(module)
 
                     for name, obj in module.__dict__.items():
-                        # Yüklenen her sınıfı kontrol et
+                        print(f"    [DroneController]: '{filename}' içinde bulunan obje: {name}, Tipi: {type(obj)}") # Debug print
                         if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
                             # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
                             mission_id = name # Sınıf adını görev ID olarak kullan
                             self.missions[mission_id] = obj
-                            print(f"  Görev yüklendi: {mission_id} (Dosya: {filename})")
+                            print(f"  [DroneController]: Görev yüklendi: {mission_id} (Dosya: {filename})")
                             break # Her dosyadan sadece bir görev sınıfı beklenir
                 except Exception as e:
                     print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
