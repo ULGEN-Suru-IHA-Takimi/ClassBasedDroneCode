@@ -209,10 +209,8 @@ class XBeeController:
                 remote_addr_obj = XBee64BitAddress(bytes.fromhex(remote_xbee_addr_hex))
                 remote_xbee = RemoteXBeeDevice(self.device, remote_addr_obj)
                 self.device.send_data(remote_xbee, data_to_send)
-                print(f"Paket API modunda gönderildi: Tipi='{package.package_type}', Hedef='{remote_xbee_addr_hex}', Boyut={len(data_to_send)} bayt")
             else:
                 self.device.send_data_broadcast(data_to_send)
-                print(f"Paket API modunda BROADCAST edildi: Tipi='{package.package_type}', Boyut={len(data_to_send)} bayt")
 
         except TimeoutException:
             print(f"Hata: Paket gönderilirken zaman aşımı oluştu. Hedef XBee ulaşılamıyor olabilir.")

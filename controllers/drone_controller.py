@@ -154,7 +154,8 @@ class DroneController(DroneConnection):
         self.pid_north = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5) 
         self.pid_east = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5)  
         # Dikey PID: İrtifa tutma için ayarlandı
-        self.pid_down = PIDController(kp=1.0, ki=0.01, kd=0.5, integral_max=10.0, integral_min=-10.0)  
+        # GÜNCELLENDİ: kp ve ki artırıldı, kd artırıldı
+        self.pid_down = PIDController(kp=2.5, ki=0.05, kd=0.8, integral_max=10.0, integral_min=-10.0)  
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
@@ -559,145 +560,6 @@ class DroneController(DroneConnection):
             print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
         except Exception as e:
             print(f"[DroneController]: Hedef koordinatlara gitme görevinde hata: {e}")
-        finally:
-            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
-            try:
-                await self.drone.offboard.stop()
-                print("[DroneController]: Offboard modu durduruldu.")
-            except offboard.OffboardError as error:
-                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
-            return True # Görev tamamlandı veya iptal edildi
-
-
-    async def goto_waypoint(self, waypoint_id: str) -> bool:
-        """
-        Belirtilen waypoint ID'sine drone'u gönderir.
-        Bu fonksiyon, waypoint bilgilerini alıp goto_location'ı çağırır.
-        """
-        waypoint = self.waypoint_manager.read(waypoint_id)
-        if not waypoint:
-            print(f"[DroneController]: Waypoint {waypoint_id} bulunamadı.")
-            return False
-
-        # Waypoint'ten alınan koordinat ve yön bilgileri ile goto_location'ı çağır
-        return await self.goto_location(waypoint.lat, waypoint.lon, waypoint.alt, waypoint.hed)
-
-
-    def load_missions(self, missions_folder: str = "missions"):
-        """
-        'missions' klasöründeki görev sınıflarını dinamik olarak yükler.
-        Görev ID'si olarak dosya adını kullanır (örn: '1.py' -> '1').
-        """
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        full_missions_path = os.path.join(project_root, missions_folder)
-
-        print(f"[DroneController]: Görev klasörü yolu: {full_missions_path}")
-
-        if not os.path.exists(full_missions_path):
-            print(f"[DroneController]: Hata! '{full_missions_path}' görev klasörü bulunamadı.")
-            return
-
-        print(f"[DroneController]: Görevler '{full_missions_path}' klasöründen yükleniyor...")
-        
-        for filename in os.listdir(full_missions_path):
-            if filename.endswith(".py") and filename != "__init__.py":
-                # Dosya adını görev ID'si olarak kullanıyoruz
-                file_mission_id = filename[:-3] 
-                file_path = os.path.join(full_missions_path, filename)
-                
-                print(f"  [DroneController]: '{filename}' dosyası işleniyor (Dosya ID: {file_mission_id})...")
-
-                try:
-                    spec = importlib.util.spec_from_file_location(f"mission_{file_mission_id}", file_path)
-                    if spec is None:
-                        print(f"  Uyarı: '{filename}' için spec oluşturulamadı, atlanıyor.")
-                        continue
-                    
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-
-                    found_mission_class = None
-                    for name, obj in module.__dict__.items():
-                        # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
-                        if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
-                            found_mission_class = obj
-                            break # İlk bulunan geçerli görev sınıfını al
-
-                    if found_mission_class:
-                        # Sınıfın içindeki MISSION_ID ve mission_name özelliklerini alıyoruz
-                        class_mission_id = getattr(found_mission_class, 'MISSION_ID', None)
-                        mission_name = getattr(found_mission_class, 'mission_name', "Bilinmeyen Görev")
-
-                        # Dosya adı ID'si ile sınıfın içindeki ID'yi karşılaştırabiliriz (isteğe bağlı tutarlılık kontrolü)
-                        if class_mission_id and class_mission_id == file_mission_id:
-                            self.missions[file_mission_id] = {
-                                'class': found_mission_class, 
-                                'name': mission_name,
-                                'class_id': class_mission_id # Sınıfın kendi içindeki ID'yi de saklayabiliriz
-                            }
-                            print(f"  [DroneController]: Görev yüklendi: ID='{file_mission_id}', İsim='{mission_name}' (Dosya: {filename}, Sınıf: {found_mission_class.__name__})")
-                        else:
-                            print(f"  Uyarı: '{filename}' dosyasındaki '{found_mission_class.__name__}' sınıfının MISSION_ID ('{class_mission_id}') dosya adıyla ('{file_mission_id}') eşleşmiyor veya tanımlı değil. Bu görev yüklenmedi.")
-                    else:
-                        print(f"  Uyarı: '{filename}' dosyasında MissionBase'den türeyen geçerli bir görev sınıfı bulunamadı.")
-
-                except Exception as e:
-                    print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
-        
-        if not self.missions:
-            print("[DroneController]: Hiç görev yüklenemedi.")
-        else:
-            print(f"[DroneController]: Toplam {len(self.missions)} görev yüklendi.")
-
-
-    async def run_mission(self, mission_id: str, params: dict) -> bool:
-        """
-        Belirtilen görev ID'sine sahip görevi başlatır.
-        mission_id burada dosya adından gelen ID'dir (örn: "1").
-        """
-        mission_info = self.missions.get(mission_id)
-        if not mission_info:
-            print(f"[DroneController]: Görev '{mission_id}' bulunamadı.")
-            return False
-
-        mission_class = mission_info['class']
-        mission_name = mission_info['name']
-
-        print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) başlatılıyor...")
-        
-        self.current_mission = mission_class(self, mission_id, mission_name, params) 
-        self.mission_confirmations.clear() # Yeni görev için onayları sıfırla
-        
-        try:
-            await self.current_mission.start()
-            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) tamamlandı.")
-            # Görev tamamlandığında durum paketi gönderilebilir
-            status_package = XBeePackage(
-                package_type="MS",
-                sender=self.DRONE_ID,
-                params={"status": "successful", "mission_id": mission_id}
-            )
-            self.xbee_controller.send(status_package)
-            return True
-        except asyncio.CancelledError:
-            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
-            status_package = XBeePackage(
-                package_type="MS",
-                sender=self.DRONE_ID,
-                params={"status": "cancelled", "mission_id": mission_id}
-            )
-            self.xbee_controller.send(status_package)
-            return False
-        except Exception as e:
-            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
-            status_package = XBeePackage(
-                package_type="MS",
-                sender=self.DRONE_ID,
-                params={"status": "failed", "mission_id": mission_id, "error": str(e)}
-            )
-            self.xbee_controller.send(status_package)
-            return False
         finally:
             # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
             try:
