@@ -184,9 +184,9 @@ class DroneController(DroneConnection):
         self._monitor_armed_state_task = asyncio.create_task(self._monitor_armed_state()) # Görev referansı tutuluyor
 
         # Görevleri yükle
-        print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
-        print(f"[DroneController]: Attributes of self before load_missions: {dir(self)}") # Yeni hata ayıklama çıktısı
-        self.load_missions() 
+        # print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
+        # print(f"[DroneController]: Attributes of self before load_missions: {dir(self)}") # Yeni hata ayıklama çıktısı
+        # self.load_missions() 
         
         print("[DroneController]: Drone Controller hazır.")
 
@@ -483,10 +483,8 @@ class DroneController(DroneConnection):
                 # Yatay hatalar
                 error_north_m = (target_lat - current_lat) * lat_to_m
                 error_east_m = (target_lon - current_lon) * lon_to_m
-                
                 # Dikey hata (irtifayı korumak için)
                 error_down_m = (target_alt - current_alt)
-
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
                 print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
@@ -512,23 +510,21 @@ class DroneController(DroneConnection):
                 # PID çıktılarını hesapla (hız komutları)
                 vel_north_pid = self.pid_north.calculate(error_north_m, dt)
                 vel_east_pid = self.pid_east.calculate(error_east_m, dt)
-                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
-
-                # APF'den gelen kaçınma vektörlerini hesapla
-                avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
+                # Dikeyde PID ve APF kullanılmayacak, sadece sabit yükseklik korunacak
+                # vel_down_pid = self.pid_down.calculate(-error_down_m, dt)
+                # APF'den gelen kaçınma vektörlerini hesapla (sadece yatay)
+                avoid_north, avoid_east, _ = self.apf_controller.calculate_avoidance_vector(
                     current_lat, current_lon, current_alt
                 )
 
-                print(f"  [DEBUG-Yatay Fazı] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
-                print(f"  [DEBUG-Yatay Fazı] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
-
-                # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
+                # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması (sadece yatay)
                 command_vel_north = vel_north_pid + avoid_north
                 command_vel_east = vel_east_pid + avoid_east
-                command_vel_down = vel_down_pid + avoid_down # Dikey PID'den gelen komut + APF
-
-                # Ham D komutunu (sınırlamadan önce) yazdır
-                print(f"  [DEBUG-Yatay Fazı] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
+                # Dikey hız komutu: Yüksekliği sabit tutmak için sadece hata varsa küçük bir düzeltme uygula
+                command_vel_down = 0.0
+                if abs(error_down_m) > ALT_TOLERANCE_M:
+                    # Sabit yükseklikten sapma varsa küçük bir düzeltme uygula
+                    command_vel_down = max(min(error_down_m, 0.5), -0.5) # max ±0.5 m/s düzeltme
 
                 # Hız komutlarını sınırla
                 current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
@@ -537,9 +533,8 @@ class DroneController(DroneConnection):
                     command_vel_north *= scale_factor
                     command_vel_east *= scale_factor
                 
-                max_vertical_vel = 5.0 # m/s
-                if abs(command_vel_down) > max_vertical_vel:
-                    command_vel_down = math.copysign(max_vertical_vel, command_vel_down)
+                # Dikey hız komutunu ±0.5 m/s ile sınırla
+                command_vel_down = max(min(command_vel_down, 0.5), -0.5)
 
                 overall_max_vel = 5.0 # m/s
                 current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
