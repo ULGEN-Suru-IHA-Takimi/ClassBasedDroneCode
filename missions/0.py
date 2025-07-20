@@ -49,13 +49,19 @@ class SimpleWaypointMission(Mission):
         xbee.send(confirm_package)
         print(f"[{self.mission_name} - ID:{self.mission_id}]: Görev onay paketi gönderildi: {self.mission_id}")
 
-        waypoint = (47.397606, 8.543060, 10.0, 0)
+        # Waypoint'i doğrudan bir tuple olarak tanımlamak yerine, Waypoint nesnesi gibi erişilebilir hale getirelim
+        # Veya doğrudan goto_location'a lat, lon, alt, hed geçirelim
+        # Waypoint'i tuple olarak tanımladığınız için, elemanlarına tek tek erişmeliyiz.
+        waypoint_coords = (47.397606, 8.543060, 10.0, 0) # (lat, lon, alt, hed)
+        
         # Waypoint'in kendi irtifası varsa onu kullan, yoksa varsayılanı kullan
-        target_altitude = waypoint[2] if waypoint[2] is not None else self.default_altitude_m
+        # Bu satırda waypoint bir tuple olduğu için, waypoint[2] kullanıldı.
+        target_altitude = waypoint_coords[2] if waypoint_coords[2] is not None else self.default_altitude_m
 
-        print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine gidiliyor: Lat={waypoint.lat:.6f}, Lon={waypoint.lon:.6f}, Alt={target_altitude}m, Hed={waypoint.hed} derece")
+        print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine gidiliyor: Lat={waypoint_coords[0]:.6f}, Lon={waypoint_coords[1]:.6f}, Alt={target_altitude}m, Hed={waypoint_coords[3]} derece")
 
-        if not await self.drone_controller.goto_location(waypoint):
+        # goto_location metoduna ayrı ayrı lat, lon, alt, hed değerlerini geçirin
+        if not await self.drone_controller.goto_location(waypoint_coords[0], waypoint_coords[1], target_altitude, waypoint_coords[3]):
             print(f"[{self.mission_name} - ID:{self.mission_id}]: Koordinat hedefine ulaşılamadı. Görev iptal ediliyor.")
             await drone.action.land() # Güvenli iniş
             return False
