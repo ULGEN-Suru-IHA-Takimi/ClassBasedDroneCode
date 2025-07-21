@@ -148,7 +148,8 @@ class DroneController(DroneConnection):
         self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) # Tuned
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
         # Vertical PID: Tuned for altitude holding
-        self.pid_down = PID(Kp=2.2, Ki=0.02, Kd=1.0, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Increased Kp slightly, decreased Kd slightly for better vertical stability
+        self.pid_down = PID(Kp=2.8, Ki=0.02, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
 
         # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
@@ -373,24 +374,24 @@ class DroneController(DroneConnection):
         This function is used internally by goto_waypoint.
         First reaches the target altitude, then moves horizontally while maintaining altitude.
         """
-        print(f"[DroneController]: Going to target coordinates: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} degrees")
+        print(f"[DroneController]: Hedef koordinatlara gidiliyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
 
-        # Start Offboard mode
-        # Send zero velocity command initially to keep the drone at its current position
+        # Offboard modunu başlat
+        # Başlangıçta drone'un mevcut konumunda kalması için sıfır hız komutu gönder
         await self.drone.offboard.set_velocity_ned(
             offboard.VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
         try:
             await self.drone.offboard.start()
-            print("[DroneController]: Offboard mode started.")
+            print("[DroneController]: Offboard modu başlatıldı.")
         except offboard.OffboardError as error:
-            print(f"[DroneController]: Failed to start Offboard mode: {error}")
+            print(f"[DroneController]: Offboard mod başlatılamadı: {error}")
             return False
 
-        TOLERANCE_M = 1.0 # Horizontal proximity tolerance (meters)
-        ALT_TOLERANCE_M = 0.5 # Altitude tolerance (meters)
-        SPEED_TOLERANCE = 0.5 # Speed tolerance (m/s)
+        TOLERANCE_M = 1.0 # Yatay hedefe yakınlık toleransı (metre)
+        ALT_TOLERANCE_M = 0.5 # İrtifa toleransı (metre)
+        SPEED_TOLERANCE = 0.5 # Hız toleransı (m/s)
         
-        # Approximately 1 degree latitude ~ 111320 meters
+        # Yaklaşık 1 derece enlem ~ 111320 metre
         lat_to_m = 111320.0
         
         # Reset PID controllers
@@ -402,14 +403,14 @@ class DroneController(DroneConnection):
             position_async_iterator = self.drone.telemetry.position().__aiter__()
             velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
 
-            # --- PHASE 1: Reach target altitude ---
-            print("[DroneController]: Ascending/descending to target altitude...")
+            # --- FAZ 1: Hedef irtifaya ulaş ---
+            print("[DroneController]: Hedef irtifaya çıkılıyor/iniliyor...")
             while not self._stop_tasks_event.is_set():
                 try:
                     position_info = await position_async_iterator.__anext__()
                     velocity_info = await velocity_async_iterator.__anext__()
                 except StopAsyncIteration:
-                    print("[DroneController]: Telemetry stream ended (altitude phase).")
+                    print("[DroneController]: Telemetry akışı sona erdi (irtifa fazı).")
                     break
                 except asyncio.CancelledError:
                     raise
@@ -417,13 +418,17 @@ class DroneController(DroneConnection):
                 current_alt = position_info.absolute_altitude_m
                 current_vel_down = velocity_info.down_m_s
 
-                error_down_m = (target_alt - current_alt) # Target altitude - current altitude
+                error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
 
-                print(f"  [DEBUG-Altitude Phase] Current Alt: {current_alt:.2f}m, Target Alt: {target_alt:.2f}m, Error D: {error_down_m:.2f}m, Current Vel D: {current_vel_down:.2f}m/s")
+                print(f"  [DEBUG-İrtifa Fazı] Mevcut Alt: {current_alt:.2f}m, Hedef Alt: {target_alt:.2f}m, Hata D: {error_down_m:.2f}m, Mevcut Hız D: {current_vel_down:.2f}m/s")
+                
+                # PID bileşenlerini al ve yazdır
+                p_term, i_term, d_term = self.pid_down.components
+                print(f"  [DEBUG-İrtifa Fazı] PID Bileşenleri (P, I, D): ({p_term:.2f}, {i_term:.2f}, {d_term:.2f})")
 
                 # Check if target altitude is reached and stable
                 if abs(error_down_m) < ALT_TOLERANCE_M and abs(current_vel_down) < SPEED_TOLERANCE:
-                    print("[DroneController]: Target altitude reached and stable.")
+                    print("[DroneController]: Hedef irtifaya ulaşıldı ve stabil.")
                     break
 
                 # Calculate vertical velocity command using PID (input is error_down_m)
@@ -436,14 +441,16 @@ class DroneController(DroneConnection):
                 if abs(vel_down_pid) > max_vertical_vel:
                     vel_down_pid = math.copysign(max_vertical_vel, vel_down_pid) 
 
-                # Send only vertical velocity command, stay fixed horizontally
+                print(f"  [DEBUG-İrtifa Fazı] PID Çıkışı (vel_down_pid): {vel_down_pid:.2f}m/s") # Added debug for PID output
+
+                # Sadece dikey hız komutu gönder, yatayda sabit kal
                 await self.drone.offboard.set_velocity_ned(
                     offboard.VelocityNedYaw(0.0, 0.0, vel_down_pid, target_hed)
                 )
                 await asyncio.sleep(self.pid_down.sample_time) # Use PID's sample time
 
-            # --- PHASE 2: Move horizontally at target altitude ---
-            print("[DroneController]: Starting horizontal movement, altitude will be maintained.")
+            # --- FAZ 2: Hedef irtifada yatayda hareket et ---
+            print("[DroneController]: Yatay harekete başlanıyor, irtifa korunacak.")
             # Reset horizontal PIDs (they were not used in altitude phase)
             self.pid_north.reset()
             self.pid_east.reset()
@@ -454,7 +461,7 @@ class DroneController(DroneConnection):
                     position_info = await position_async_iterator.__anext__()
                     velocity_info = await velocity_async_iterator.__anext__()
                 except StopAsyncIteration:
-                    print("[DroneController]: Telemetry stream ended (horizontal phase).")
+                    print("[DroneController]: Telemetry akışı sona erdi (yatay fazı).")
                     break
                 except asyncio.CancelledError:
                     raise
@@ -469,31 +476,31 @@ class DroneController(DroneConnection):
 
                 lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
 
-                # Horizontal errors
+                # Yatay hatalar
                 error_north_m = (target_lat - current_lat) * lat_to_m
                 error_east_m = (target_lon - current_lon) * lon_to_m
                 
-                # Vertical error (to maintain altitude)
+                # Dikey hata (irtifayı korumak için)
                 error_down_m = (target_alt - current_alt)
 
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
-                print(f"  [DEBUG-Horizontal Phase] Current: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
-                print(f"  [DEBUG-Horizontal Phase] Target: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
-                print(f"  [DEBUG-Horizontal Phase] Error (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
-                print(f"  [DEBUG-Horizontal Phase] Horizontal Distance: {horizontal_distance:.2f}m")
-                print(f"  [DEBUG-Horizontal Phase] Current Velocity (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
 
                 # Has target been reached? (Horizontal and Vertical tolerances)
                 if horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M:
                     # Try to keep the drone fixed at the target point
-                    print(f"[DroneController]: Target reached: {horizontal_distance:.2f}m horizontally and {abs(error_down_m):.2f}m vertically. Stabilizing...")
+                    print(f"[DroneController]: Hedefe {horizontal_distance:.2f}m yatayda ve {abs(error_down_m):.2f}m dikeyde ulaşıldı. Sabitleniyor...")
                     for _ in range(10): # Wait for 1 second (0.1s * 10) to stabilize
                         await self.drone.offboard.set_velocity_ned(
                             offboard.VelocityNedYaw(0.0, 0.0, 0.0, target_hed)
                         )
                         await asyncio.sleep(0.1)
-                    print("[DroneController]: Drone stabilized. Mission completed.")
+                    print("[DroneController]: Drone sabitlendi. Görev tamamlandı.")
                     break # Exit loop
 
                 # Calculate PID outputs (velocity commands)
@@ -502,13 +509,22 @@ class DroneController(DroneConnection):
                 # Use PID for vertical velocity control, also add vertical avoidance from APF
                 vel_down_pid = self.pid_down(-error_down_m) # Error direction inverted
 
+                # PID bileşenlerini al ve yazdır (yatay faz için de)
+                p_term_n, i_term_n, d_term_n = self.pid_north.components
+                p_term_e, i_term_e, d_term_e = self.pid_east.components
+                p_term_d, i_term_d, d_term_d = self.pid_down.components
+                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (N-P, I, D): ({p_term_n:.2f}, {i_term_n:.2f}, {d_term_n:.2f})")
+                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (E-P, I, D): ({p_term_e:.2f}, {i_term_e:.2f}, {d_term_e:.2f})")
+                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (D-P, I, D): ({p_term_d:.2f}, {i_term_d:.2f}, {d_term_d:.2f})")
+
+
                 # Calculate avoidance vectors from APF
                 avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
                     current_lat, current_lon, current_alt
                 )
 
-                print(f"  [DEBUG-Horizontal Phase] PID Outputs: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
-                print(f"  [DEBUG-Horizontal Phase] APF Avoidance: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] PID Çıkışları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
 
                 # Calculate final velocity commands: PID outputs + APF avoidance
                 command_vel_north = vel_north_pid + avoid_north
@@ -516,7 +532,7 @@ class DroneController(DroneConnection):
                 command_vel_down = vel_down_pid + avoid_down # Command from vertical PID + APF
 
                 # Print raw D command (before limiting)
-                print(f"  [DEBUG-Horizontal Phase] Raw D Command (before limiting): {command_vel_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
 
                 # Limit velocity commands
                 current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
@@ -537,7 +553,7 @@ class DroneController(DroneConnection):
                     command_vel_east *= scale_factor
                     command_vel_down *= scale_factor
                 
-                print(f"  [DEBUG-Horizontal Phase] Final Velocity Command: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
 
                 await self.drone.offboard.set_velocity_ned(
                     offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
@@ -546,64 +562,64 @@ class DroneController(DroneConnection):
                 await asyncio.sleep(self.pid_north.sample_time) # Use horizontal PID's sample time
 
         except asyncio.CancelledError:
-            print("[DroneController]: Go to target coordinates task cancelled.")
+            print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
         except Exception as e:
-            print(f"[DroneController]: Error in go to target coordinates task: {e}")
+            print(f"[DroneController]: Hedef koordinatlara gitme görevinde hata: {e}")
         finally:
-            # Stop Offboard mode (when task is completed or an error occurs)
+            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
             try:
                 await self.drone.offboard.stop()
-                print("[DroneController]: Offboard mode stopped.")
+                print("[DroneController]: Offboard modu durduruldu.")
             except offboard.OffboardError as error:
-                print(f"[DroneController]: Failed to stop Offboard mode: {error}")
-            self.current_mission = None # Reset when mission is completed or failed
-            return True # Mission completed or cancelled
+                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
+            self.current_mission = None # Görev tamamlandığında veya başarısız olduğunda sıfırla
+            return True # Görev tamamlandı veya iptal edildi
 
 
     async def goto_waypoint(self, waypoint_id: str) -> bool:
         """
-        Sends the drone to the specified waypoint ID.
-        This function retrieves waypoint information and calls goto_location.
+        Belirtilen waypoint ID'sine drone'u gönderir.
+        Bu fonksiyon, waypoint bilgilerini alıp goto_location'ı çağırır.
         """
         waypoint = self.waypoint_manager.read(waypoint_id)
         if not waypoint:
-            print(f"[DroneController]: Waypoint {waypoint_id} not found.")
+            print(f"[DroneController]: Waypoint {waypoint_id} bulunamadı.")
             return False
 
-        # Call goto_location with coordinate and heading information from the waypoint
+        # Waypoint'ten alınan koordinat ve yön bilgileri ile goto_location'ı çağır
         return await self.goto_location(waypoint.lat, waypoint.lon, waypoint.alt, waypoint.hed)
 
 
     def load_missions(self, missions_folder: str = "missions"):
         """
-        Dynamically loads mission classes from the 'missions' folder.
-        Uses the file name as the mission ID (e.g., '1.py' -> '1').
+        'missions' klasöründeki görev sınıflarını dinamik olarak yükler.
+        Görev ID'si olarak dosya adını kullanır (örn: '1.py' -> '1').
         """
         print("[DroneController]: Entering load_missions method.") 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
         full_missions_path = os.path.join(project_root, missions_folder)
 
-        print(f"[DroneController]: Mission folder path: {full_missions_path}")
+        print(f"[DroneController]: Görev klasörü yolu: {full_missions_path}")
 
         if not os.path.exists(full_missions_path):
-            print(f"[DroneController]: Error! Mission folder '{full_missions_path}' not found.")
+            print(f"[DroneController]: Hata! '{full_missions_path}' görev klasörü bulunamadı.")
             return
 
-        print(f"[DroneController]: Missions are being loaded from '{full_missions_path}' folder...")
+        print(f"[DroneController]: Görevler '{full_missions_path}' klasöründen yükleniyor...")
         
         for filename in os.listdir(full_missions_path):
             if filename.endswith(".py") and filename != "__init__.py":
-                # Use the file name as the mission ID
+                # Dosya adını görev ID'si olarak kullanıyoruz
                 file_mission_id = filename[:-3] 
                 file_path = os.path.join(full_missions_path, filename)
                 
-                print(f"  [DroneController]: Processing '{filename}' file (File ID: {file_mission_id})...")
+                print(f"  [DroneController]: '{filename}' dosyası işleniyor (Dosya ID: {file_mission_id})...")
 
                 try:
                     spec = importlib.util.spec_from_file_location(f"mission_{file_mission_id}", file_path)
                     if spec is None:
-                        print(f"  Warning: Could not create spec for '{filename}', skipping.")
+                        print(f"  Uyarı: '{filename}' için spec oluşturulamadı, atlanıyor.")
                         continue
                     
                     module = importlib.util.module_from_spec(spec)
@@ -611,60 +627,60 @@ class DroneController(DroneConnection):
 
                     found_mission_class = None
                     for name, obj in module.__dict__.items():
-                        # Get only classes that inherit from MissionBase and are not MissionBase itself
+                        # Sadece MissionBase'den türeyen ve kendisi olmayan sınıfları al
                         if isinstance(obj, type) and issubclass(obj, MissionBase) and obj is not MissionBase:
                             found_mission_class = obj
-                            break # Get the first valid mission class found
+                            break # İlk bulunan geçerli görev sınıfını al
 
                     if found_mission_class:
-                        # Get MISSION_ID and mission_name attributes from the class
+                        # Sınıfın içindeki MISSION_ID ve mission_name özelliklerini alıyoruz
                         class_mission_id = getattr(found_mission_class, 'MISSION_ID', None)
-                        mission_name = getattr(found_mission_class, 'mission_name', "Unknown Mission")
+                        mission_name = getattr(found_mission_class, 'mission_name', "Bilinmeyen Görev")
 
-                        # We can compare the file name ID with the ID inside the class (optional consistency check)
+                        # Dosya adı ID'si ile sınıfın içindeki ID'yi karşılaştırabiliriz (isteğe bağlı tutarlılık kontrolü)
                         if class_mission_id and class_mission_id == file_mission_id:
                             self.missions[file_mission_id] = {
                                 'class': found_mission_class, 
                                 'name': mission_name,
-                                'class_id': class_mission_id # We can also store the class's own ID
+                                'class_id': class_mission_id # Sınıfın kendi içindeki ID'yi de saklayabiliriz
                             }
-                            print(f"  [DroneController]: Mission loaded: ID='{file_mission_id}', Name='{mission_name}' (File: {filename}, Class: {found_mission_class.__name__})")
+                            print(f"  [DroneController]: Görev yüklendi: ID='{file_mission_id}', İsim='{mission_name}' (Dosya: {filename}, Sınıf: {found_mission_class.__name__})")
                         else:
-                            print(f"  Warning: MISSION_ID ('{class_mission_id}') of class '{found_mission_class.__name__}' in '{filename}' does not match the file name ('{file_mission_id}') or is not defined. This mission was not loaded.")
+                            print(f"  Uyarı: '{filename}' dosyasındaki '{found_mission_class.__name__}' sınıfının MISSION_ID ('{class_mission_id}') dosya adıyla ('{file_mission_id}') eşleşmiyor veya tanımlı değil. Bu görev yüklenmedi.")
                     else:
-                        print(f"  Warning: No valid mission class inheriting from MissionBase found in '{filename}'.")
+                        print(f"  Uyarı: '{filename}' dosyasında MissionBase'den türeyen geçerli bir görev sınıfı bulunamadı.")
 
                 except Exception as e:
-                    print(f"  Error: An issue occurred while loading mission from '{filename}': {e}")
+                    print(f"  Hata: '{filename}' dosyasından görev yüklenirken sorun oluştu: {e}")
         
         if not self.missions:
-            print("[DroneController]: No missions loaded.")
+            print("[DroneController]: Hiç görev yüklenemedi.")
         else:
-            print(f"[DroneController]: Total {len(self.missions)} missions loaded.")
+            print(f"[DroneController]: Toplam {len(self.missions)} görev yüklendi.")
 
 
     async def run_mission(self, mission_id: str, params: dict) -> bool:
         """
-        Starts the mission with the specified mission ID.
-        mission_id here is the ID from the file name (e.g., "1").
+        Belirtilen görev ID'sine sahip görevi başlatır.
+        mission_id burada dosya adından gelen ID'dir (örn: "1").
         """
         mission_info = self.missions.get(mission_id)
         if not mission_info:
-            print(f"[DroneController]: Mission '{mission_id}' not found.")
+            print(f"[DroneController]: Görev '{mission_id}' bulunamadı.")
             return False
 
         mission_class = mission_info['class']
         mission_name = mission_info['name']
 
-        print(f"[DroneController]: Mission '{mission_id}' ({mission_name}) is starting...")
+        print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) başlatılıyor...")
         
         self.current_mission = mission_class(self, mission_id, mission_name, params) 
-        self.mission_confirmations.clear() # Reset confirmations for new mission
+        self.mission_confirmations.clear() # Yeni görev için onayları sıfırla
         
         try:
             await self.current_mission.start()
-            print(f"[DroneController]: Mission '{mission_id}' ({mission_name}) completed.")
-            # Mission status package can be sent when mission is completed
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) tamamlandı.")
+            # Görev tamamlandığında durum paketi gönderilebilir
             status_package = XBeePackage(
                 package_type="MS",
                 sender=self.DRONE_ID,
@@ -673,7 +689,7 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return True
         except asyncio.CancelledError:
-            print(f"[DroneController]: Mission '{mission_id}' ({mission_name}) cancelled.")
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
             status_package = XBeePackage(
                 package_type="MS",
                 sender=self.DRONE_ID,
@@ -682,7 +698,7 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return False
         except Exception as e:
-            print(f"[DroneController]: Error occurred while running mission '{mission_id}' ({mission_name}): {e}")
+            print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
             status_package = XBeePackage(
                 package_type="MS",
                 sender=self.DRONE_ID,
@@ -691,20 +707,20 @@ class DroneController(DroneConnection):
             self.xbee_controller.send(status_package)
             return False
         finally:
-            # Stop Offboard mode (when mission is completed or an error occurs)
+            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
             try:
                 await self.drone.offboard.stop()
-                print("[DroneController]: Offboard mode stopped.")
+                print("[DroneController]: Offboard modu durduruldu.")
             except offboard.OffboardError as error:
-                print(f"[DroneController]: Failed to stop Offboard mode: {error}")
-            self.current_mission = None # Reset when mission is completed or failed
-            return True # Mission completed or cancelled
+                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
+            self.current_mission = None # Görev tamamlandığında veya başarısız olduğunda sıfırla
+            return True # Görev tamamlandı veya iptal edildi
 
 
-# --- Main Function for Testing ---
+# --- Test için Ana Fonksiyon ---
 async def main():
-    # Get XBee port and drone connection address from user
-    print('Enter port for XBee connection (e.g., 0, 1, ... or leave empty for "default")')
+    # Kullanıcıdan XBee portunu ve drone bağlantı adresini al
+    print('XBee bağlantısı için port girin (örn: 0, 1, ... veya "default" için boş bırakın)')
     input_xbee_port_str = await asyncio.to_thread(input, '/dev/ttyUSB? : ')
 
     if input_xbee_port_str.strip() == "":
@@ -714,10 +730,10 @@ async def main():
             port_number = int(input_xbee_port_str)
             xbee_port = f"/dev/ttyUSB{port_number}"
         except ValueError:
-            print("Invalid port input. Defaulting to /dev/ttyUSB0.")
+            print("Geçersiz port girişi. Varsayılan olarak /dev/ttyUSB0 kullanılacak.")
             xbee_port = "/dev/ttyUSB0"
 
-    print('Enter address for drone connection (e.g., "udpin://0.0.0.0:14540" or leave empty for "default")')
+    print('Drone bağlantısı için adres girin (örn: "udpin://0.0.0.0:14540" veya "default" için boş bırakın)')
     input_drone_sys_address = await asyncio.to_thread(input, 'Drone System Address: ')
     if input_drone_sys_address.strip() == "":
         drone_sys_address = "udpin://0.0.0.0:14540"
@@ -730,52 +746,52 @@ async def main():
         await drone_controller.connect()
 
         if drone_controller.xbee_controller and not drone_controller.xbee_controller.connected:
-            print("Application terminating due to XBee connection issues.")
+            print("XBee bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
             return
 
-        print("\nDrone Controller successfully started.")
+        print("\nDrone Controller başarıyla başlatıldı.")
         def print_help():
-            print("\nCommands:")
-            print("  'arm'    : Arm the drone")
-            print("  'takeoff': Take off the drone (must be armed)")
-            print("  'land'   : Land the drone")
-            print("  'goto <waypoint_id>': Go to the specified waypoint (PID/APF controlled)")
-            print("  'goto_coord <lat> <lon> <alt> <hed>': Go to the specified coordinates (PID/APF controlled)")
-            print("  'addwp <id> <lat> <lon> <alt> <hed>': Add/update waypoint")
-            print("  'rmwp <id>': Remove waypoint")
-            print("  'sendgps': Send manual GPS package (test)")
-            print("  'run <mission_id> [param1=value1 param2=value2 ...]': Start mission (listed by ID and Name)")
-            print("  'list_missions': Lists loaded missions by ID and Name")
-            print("  'help'   : Show this command list")
-            print("  'q'      : Exit")
+            print("\nKomutlar:")
+            print("  'arm'    : Drone'u arm et")
+            print("  'takeoff': Drone'u havalandır (arm edilmiş olmalı)")
+            print("  'land'   : Drone'u indir")
+            print("  'goto <waypoint_id>': Belirtilen waypointe git (PID/APF kontrollü)")
+            print("  'goto_coord <lat> <lon> <alt> <hed>': Belirtilen koordinatlara git (PID/APF kontrollü)")
+            print("  'addwp <id> <lat> <lon> <alt> <hed>': Waypoint ekle/güncelle")
+            print("  'rmwp <id>': Waypoint sil")
+            print("  'sendgps': Manuel GPS paketi gönder (test)")
+            print("  'run <mission_id> [param1=value1 param2=value2 ...]': Görev başlat (ID ve İsim ile listelenir)")
+            print("  'list_missions': Yüklü görevleri ID ve İsimleri ile listeler")
+            print("  'help'   : Bu komut listesini gösterir")
+            print("  'q'      : Çıkış")
         
         print_help()
 
         while True:
-            command = (await asyncio.to_thread(input, "Enter command: ")).strip().lower()
+            command = (await asyncio.to_thread(input, "Komut girin: ")).strip().lower()
 
             if command == 'q':
                 break
             elif command == 'arm':
-                print("Arming drone...")
+                print("Drone arm ediliyor...")
                 await drone_controller.drone.action.arm()
-                print("Drone armed.")
+                print("Drone arm edildi.")
             elif command == 'takeoff':
-                print("Drone taking off...")
+                print("Drone havalanıyor...")
                 await drone_controller.drone.action.takeoff()
-                print("Drone took off.")
+                print("Drone havalandı.")
             elif command == 'land':
-                print("Drone landing...")
+                print("Drone iniş yapıyor...")
                 await drone_controller.drone.action.land()
-                print("Drone landed.")
+                print("Drone iniş yaptı.")
             elif command.startswith('goto '):
                 parts = command.split()
                 if len(parts) == 2:
                     waypoint_id = parts[1]
                     await drone_controller.goto_waypoint(waypoint_id)
                 else:
-                    print("Usage: goto <waypoint_id>")
-            elif command.startswith('goto_coord '): # New command added
+                    print("Kullanım: goto <waypoint_id>")
+            elif command.startswith('goto_coord '): # Yeni komut eklendi
                 parts = command.split()
                 if len(parts) == 5:
                     try:
@@ -785,9 +801,9 @@ async def main():
                         hed = float(parts[4])
                         await drone_controller.goto_location(lat, lon, alt, hed)
                     except ValueError:
-                        print("Invalid number format. Usage: goto_coord <lat> <lon> <alt> <hed>")
+                        print("Geçersiz sayı formatı. Kullanım: goto_coord <lat> <lon> <alt> <hed>")
                 else:
-                    print("Usage: goto_coord <lat> <lon> <alt> <hed>")
+                    print("Kullanım: goto_coord <lat> <lon> <alt> <hed>")
             elif command.startswith('addwp '):
                 parts = command.split()
                 if len(parts) == 6:
@@ -798,18 +814,18 @@ async def main():
                         alt = float(parts[4])
                         hed = float(parts[5])
                         drone_controller.waypoint_manager.add(wp_id, lat, lon, alt, hed)
-                        print(f"Waypoint {wp_id} added.")
+                        print(f"Waypoint {wp_id} eklendi.")
                     except ValueError:
-                        print("Invalid number format. Usage: addwp <id> <lat> <lon> <alt> <hed>")
+                        print("Geçersiz sayı formatı. Kullanım: addwp <id> <lat> <lon> <alt> <hed>")
                 else:
-                    print("Usage: addwp <id> <lat> <lon> <alt> <hed>")
+                    print("Kullanım: addwp <id> <lat> <lon> <alt> <hed>")
             elif command.startswith('rmwp '):
                 parts = command.split()
                 if len(parts) == 2:
                     wp_id = parts[1]
                     drone_controller.waypoint_manager.remove(wp_id)
                 else:
-                    print("Usage: rmwp <id>")
+                    print("Kullanım: rmwp <id>")
             elif command == 'sendgps':
                 async for position in drone_controller.drone.telemetry.position():
                     lat = position.latitude_deg
@@ -821,11 +837,11 @@ async def main():
                         params={
                             "x": int(lat * 1000000),
                             "y": int(lon * 1000000),
-                            "a": int(alt * 100) # Send in centimeters
+                            "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
                     drone_controller.xbee_controller.send(gps_package) 
-                    print(f"Manual GPS package sent: Lat={lat}, Lon={lon}, Alt={alt}")
+                    print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
                     break
             elif command.startswith('run '):
                 parts = command.split()
@@ -841,28 +857,28 @@ async def main():
                                 else:
                                     mission_params[key] = value
                             else:
-                                print(f"Warning: Invalid parameter format '{param_str}'. Should be 'key=value'.")
+                                print(f"Uyarı: Geçersiz parametre formatı '{param_str}'. 'key=value' şeklinde olmalı.")
                     
                     await drone_controller.run_mission(mission_id, mission_params)
                 else:
-                    print("Usage: run <mission_id> [param1=value1 param2=value2 ...]")
+                    print("Kullanım: run <mission_id> [param1=value1 param2=value2 ...]")
             elif command == 'list_missions':
                 if drone_controller.missions:
-                    print("Loaded Missions:")
+                    print("Yüklü Görevler:")
                     for mid, info in drone_controller.missions.items():
-                        print(f"  - ID: {mid}, Name: {info['name']}")
+                        print(f"  - ID: {mid}, İsim: {info['name']}")
                 else:
-                    print("No missions loaded.")
+                    print("Hiç görev yüklenemedi.")
             elif command == 'help':
                 print_help()
             else:
-                print("Unknown command. Type 'help' to see the command list.")
+                print("Bilinmeyen komut. 'help' yazarak komut listesini görebilirsiniz.")
 
     except Exception as e:
-        print(f"Application error: {e}")
+        print(f"Uygulama hatası: {e}")
     finally:
         await drone_controller.disconnect()
-        print("Application terminated.")
+        print("Uygulama sonlandırıldı.")
 
 if __name__ == "__main__":
     asyncio.run(main())
