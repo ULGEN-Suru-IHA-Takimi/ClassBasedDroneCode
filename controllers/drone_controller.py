@@ -123,7 +123,7 @@ class DroneController(DroneConnection):
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         # Vertical PID: Tuned for altitude holding
         # Adjusted Kp, Ki, Kd and output_limits for better stability during climb and hover
-        self.pid_down = PID(Kp=2.5, Ki=0.02, Kd=1.2, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        self.pid_down = PID(Kp=2.5, Ki=0.02, Kd=1.0, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
 
         # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
@@ -370,7 +370,7 @@ class DroneController(DroneConnection):
             except Exception as e:
                 print(f"[DroneController]: Havalanma sonrası irtifa kontrolünde hata: {e}")
                 break
-            await asyncio.sleep(0.5) # Yarım saniyede bir kontrol et
+            await asyncio.sleep(0.1) # Daha sık kontrol et
 
         print(f"[DroneController]: Uyarı: Havalanma sonrası güvenli irtifaya {timeout} saniye içinde ulaşılamadı. Otomatik iniş başlatılıyor.")
         await self.drone.action.land()
@@ -454,8 +454,9 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG-İrtifa Fazı] PID Çıkışı (vel_down_pid): {vel_down_pid:.2f}m/s") # Added debug for PID output
 
                 # Sadece dikey hız komutu gönder, yatayda sabit kal
+                # KRİTİK DÜZELTME: vel_down_pid'in işareti ters çevrildi
                 await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(0.0, 0.0, vel_down_pid, target_hed)
+                    offboard.VelocityNedYaw(0.0, 0.0, -vel_down_pid, target_hed)
                 )
                 await asyncio.sleep(self.pid_down.sample_time) # Use PID's sample time
 
@@ -495,7 +496,7 @@ class DroneController(DroneConnection):
 
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
-                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hız D: {current_vel_down:.2f}m/s") # Added current_vel_down
+                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hız D: {current_vel_down:.2f}m/s") 
                 print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
                 print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
                 print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
@@ -565,8 +566,9 @@ class DroneController(DroneConnection):
                 
                 print(f"  [DEBUG-Yatay Fazı] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
 
+                # KRİTİK DÜZELTME: command_vel_down'ın işareti ters çevrildi
                 await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
+                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, -command_vel_down, target_hed)
                 )
                 
                 await asyncio.sleep(self.pid_north.sample_time) # Use horizontal PID's sample time
@@ -790,6 +792,17 @@ async def main():
                 print("Drone havalanıyor...")
                 await drone_controller.drone.action.takeoff()
                 print("Drone havalandı.")
+                
+                # Takeoff sonrası ek bekleme
+                await asyncio.sleep(10) # Drone'a havalanması için 10 saniye süre ver
+
+                # Anlık irtifa kontrolü
+                try:
+                    current_pos = await drone_controller.drone.telemetry.position().__anext__()
+                    print(f"[DroneController]: Havalanma sonrası anlık irtifa: {current_pos.absolute_altitude_m:.2f}m")
+                except Exception as e:
+                    print(f"[DroneController]: Anlık irtifa alınamadı: {e}")
+
                 # Added post-takeoff altitude check
                 # Assuming default takeoff altitude is around 2.5m for initial stability
                 await drone_controller.post_takeoff_altitude_check(target_altitude=2.5, tolerance=0.5, timeout=10) 
