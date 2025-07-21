@@ -156,7 +156,7 @@ class DroneController(DroneConnection):
         self.pid_east = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5)  
         # Dikey PID: İrtifa tutma için ayarlandı
         # GÜNCELLENDİ: kp ve ki artırıldı, kd artırıldı
-        self.pid_down = PIDController(kp=2.5, ki=0.05, kd=0.8, integral_max=10.0, integral_min=-10.0)  
+        self.pid_down = PIDController(kp=2.0, ki=0.02, kd=0.8, integral_max=2.0, integral_min=-2.0)  # AYARLANDI
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
@@ -184,9 +184,9 @@ class DroneController(DroneConnection):
         self._monitor_armed_state_task = asyncio.create_task(self._monitor_armed_state()) # Görev referansı tutuluyor
 
         # Görevleri yükle
-        # print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
-        # print(f"[DroneController]: Attributes of self before load_missions: {dir(self)}") # Yeni hata ayıklama çıktısı
-        # self.load_missions() 
+        print(f"[DroneController]: Attempting to load missions. Type of self: {type(self)}")
+        print(f"[DroneController]: Attributes of self before load_missions: {dir(self)}") # Yeni hata ayıklama çıktısı
+        self.load_missions() 
         
         print("[DroneController]: Drone Controller hazır.")
 
@@ -315,7 +315,7 @@ class DroneController(DroneConnection):
             return
 
         package_type = package_data.get('t')
-        sender_id = package_data.get('s') # <-- Buradaki yazım hatası düzeltildi
+        sender_id = package_data.get('s') 
         params = package_data.get('p', {})
 
         # print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}") # Çok fazla çıktı olmaması için kapatıldı
@@ -366,7 +366,7 @@ class DroneController(DroneConnection):
             if self.current_mission and self.current_mission.mission_id == mission_id_confirm:
                 self.mission_confirmations.add(sender_id)
                 print(f"    Onaylar: {len(self.mission_confirmations)}/{self.required_confirmations}")
-                if len(self.mission_confirmations) >= self.required_confirmations: # Düzeltildi: len(self.current_mission.all_confirmed_event) yerine len(self.mission_confirmations)
+                if len(self.mission_confirmations) >= self.required_confirmations: 
                     self.current_mission.all_confirmed_event.set()
         elif package_type == "MS":
             status = params.get('status', 'unknown')
@@ -437,7 +437,7 @@ class DroneController(DroneConnection):
                     break
 
                 dt = 0.1
-                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
+                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) 
                 
                 # Dikey hızı sınırla
                 max_vertical_vel = 5.0 # m/s
@@ -510,21 +510,24 @@ class DroneController(DroneConnection):
                 # PID çıktılarını hesapla (hız komutları)
                 vel_north_pid = self.pid_north.calculate(error_north_m, dt)
                 vel_east_pid = self.pid_east.calculate(error_east_m, dt)
-                # Dikeyde PID ve APF kullanılmayacak, sadece sabit yükseklik korunacak
-                # vel_down_pid = self.pid_down.calculate(-error_down_m, dt)
-                # APF'den gelen kaçınma vektörlerini hesapla (sadece yatay)
-                avoid_north, avoid_east, _ = self.apf_controller.calculate_avoidance_vector(
+                # Dikey hız kontrolü için PID kullan, APF'den gelen dikey kaçınmayı da ekle
+                vel_down_pid = self.pid_down.calculate(-error_down_m, dt) # Hata yönü tersine çevrildi
+                
+                # APF'den gelen kaçınma vektörlerini hesapla
+                avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
                     current_lat, current_lon, current_alt
                 )
 
-                # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması (sadece yatay)
+                print(f"  [DEBUG-Yatay Fazı] PID Çıktıları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
+
+                # Nihai hız komutlarını hesapla: PID çıktıları + APF kaçınması
                 command_vel_north = vel_north_pid + avoid_north
                 command_vel_east = vel_east_pid + avoid_east
-                # Dikey hız komutu: Yüksekliği sabit tutmak için sadece hata varsa küçük bir düzeltme uygula
-                command_vel_down = 0.0
-                if abs(error_down_m) > ALT_TOLERANCE_M:
-                    # Sabit yükseklikten sapma varsa küçük bir düzeltme uygula
-                    command_vel_down = max(min(error_down_m, 0.5), -0.5) # max ±0.5 m/s düzeltme
+                command_vel_down = vel_down_pid + avoid_down # Dikey PID'den gelen komut + APF
+
+                # Ham D komutunu (sınırlamadan önce) yazdır
+                print(f"  [DEBUG-Yatay Fazı] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
 
                 # Hız komutlarını sınırla
                 current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
@@ -533,8 +536,9 @@ class DroneController(DroneConnection):
                     command_vel_north *= scale_factor
                     command_vel_east *= scale_factor
                 
-                # Dikey hız komutunu ±0.5 m/s ile sınırla
-                command_vel_down = max(min(command_vel_down, 0.5), -0.5)
+                max_vertical_vel = 5.0 # m/s
+                if abs(command_vel_down) > max_vertical_vel:
+                    command_vel_down = math.copysign(max_vertical_vel, max_vertical_vel) # Düzeltildi: max_vertical_vel ile sınırla
 
                 overall_max_vel = 5.0 # m/s
                 current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
@@ -586,7 +590,7 @@ class DroneController(DroneConnection):
         'missions' klasöründeki görev sınıflarını dinamik olarak yükler.
         Görev ID'si olarak dosya adını kullanır (örn: '1.py' -> '1').
         """
-        print("[DroneController]: Entering load_missions method.") # Yeni hata ayıklama çıktısı
+        print("[DroneController]: Entering load_missions method.") 
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
         full_missions_path = os.path.join(project_root, missions_folder)
@@ -831,7 +835,7 @@ async def main():
                             "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
-                    self.xbee_controller.send(gps_package)
+                    drone_controller.xbee_controller.send(gps_package) # self.xbee_controller yerine drone_controller.xbee_controller
                     print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
                     break
             elif command.startswith('run '):
