@@ -123,7 +123,9 @@ class DroneController(DroneConnection):
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         # Vertical PID: Tuned for altitude holding
         # Adjusted Kp, Ki, Kd and output_limits for better stability during climb and hover
-        self.pid_down = PID(Kp=2.5, Ki=0.02, Kd=1.0, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Kp reduced, Ki significantly reduced, Kd increased for better damping and less overshoot
+        # KRİTİK DÜZELTME: PID kazançlarının işaretleri ters çevrildi
+        self.pid_down = PID(Kp=-1.5, Ki=-0.0005, Kd=-2.5, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
 
         # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
