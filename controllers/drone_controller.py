@@ -824,7 +824,7 @@ async def main():
                     alt = position.absolute_altitude_m
                     gps_package = XBeePackage(
                         package_type="G",
-                        sender=self.DRONE_ID,
+                        sender=drone_controller.DRONE_ID,
                         params={
                             "x": int(lat * 1000000),
                             "y": int(lon * 1000000),
