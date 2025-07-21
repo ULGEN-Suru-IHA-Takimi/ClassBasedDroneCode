@@ -152,11 +152,10 @@ class DroneController(DroneConnection):
 
         # PID kontrolörleri (ayarlanmış değerler)
         # Yatay PID: Daha az agresif kp, dengeli ki, kd
-        self.pid_north = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5) 
-        self.pid_east = PIDController(kp=0.08, ki=0.001, kd=0.6, integral_max=0.5, integral_min=-0.5)  
+        self.pid_north = PIDController(kp=0.1, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5) # AYARLANDI
+        self.pid_east = PIDController(kp=0.1, ki=0.001, kd=0.8, integral_max=0.5, integral_min=-0.5)  # AYARLANDI
         # Dikey PID: İrtifa tutma için ayarlandı
-        # GÜNCELLENDİ: kp ve ki artırıldı, kd artırıldı
-        self.pid_down = PIDController(kp=2.0, ki=0.02, kd=0.8, integral_max=2.0, integral_min=-2.0)  # AYARLANDI
+        self.pid_down = PIDController(kp=2.2, ki=0.02, kd=1.0, integral_max=2.0, integral_min=-2.0)  # AYARLANDI
 
         # Drone'un maksimum yatay hızı korunuyor
         self.drone_speed = 5.0 # Drone'un hedef hızı (m/s)
@@ -442,7 +441,7 @@ class DroneController(DroneConnection):
                 # Dikey hızı sınırla
                 max_vertical_vel = 5.0 # m/s
                 if abs(vel_down_pid) > max_vertical_vel:
-                    vel_down_pid = math.copysign(max_vertical_vel, vel_down_pid)
+                    vel_down_pid = math.copysign(max_vertical_vel, vel_down_pid) # Düzeltildi: max_vertical_vel ile sınırla
 
                 # Sadece dikey hız komutu gönder, yatayda sabit kal
                 await self.drone.offboard.set_velocity_ned(
@@ -538,7 +537,7 @@ class DroneController(DroneConnection):
                 
                 max_vertical_vel = 5.0 # m/s
                 if abs(command_vel_down) > max_vertical_vel:
-                    command_vel_down = math.copysign(max_vertical_vel, max_vertical_vel) # Düzeltildi: max_vertical_vel ile sınırla
+                    command_vel_down = math.copysign(max_vertical_vel, vel_down_pid) # Düzeltildi: max_vertical_vel ile sınırla
 
                 overall_max_vel = 5.0 # m/s
                 current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
@@ -835,7 +834,7 @@ async def main():
                             "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
-                    drone_controller.xbee_controller.send(gps_package) # self.xbee_controller yerine drone_controller.xbee_controller
+                    drone_controller.xbee_controller.send(gps_package) 
                     print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
                     break
             elif command.startswith('run '):
