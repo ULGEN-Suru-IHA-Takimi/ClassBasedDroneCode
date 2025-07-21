@@ -24,32 +24,6 @@ from controllers.waypoint_controller import waypoints, Waypoint
 from controllers.mission_controller import Mission as MissionBase
 
 
-# PIDController sınıfı yerine simple-pid kullanılacak
-# class PIDController:
-#     """
-#     Basit bir PID kontrolcüsü.
-#     """
-#     def __init__(self, kp, ki, kd, integral_max=1.0, integral_min=-1.0):
-#         self.kp = kp
-#         self.ki = ki
-#         self.kd = kd
-#         self.prev_error = 0.0
-#         self.integral = 0.0
-#         self.integral_max = integral_max
-#         self.integral_min = integral_min
-
-#     def calculate(self, error, dt):
-#         self.integral += error * dt
-#         if self.integral > self.integral_max:
-#             self.integral = self.integral_max
-#         elif self.integral < self.integral_min:
-#             self.integral = self.integral_min
-
-#         derivative = (error - self.prev_error) / dt
-#         output = self.kp * error + self.ki * self.integral + self.kd * derivative
-#         self.prev_error = error
-#         return output
-
 class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
     """
     Yapay Potansiyel Alan (APF) tabanlı çarpışma önleme.
@@ -144,12 +118,12 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Number of confirmations expected for the mission
 
         # PID controllers (tuned values) - using simple-pid
-        # Horizontal PID: less aggressive kp, balanced ki, kd
-        self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) # Tuned
-        self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Horizontal PID
+        self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) 
+        self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         # Vertical PID: Tuned for altitude holding
-        # Increased Kp slightly, decreased Kd slightly for better vertical stability
-        self.pid_down = PID(Kp=2.8, Ki=0.02, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Adjusted Kp, Ki, Kd and output_limits for better stability during climb and hover
+        self.pid_down = PID(Kp=2.5, Ki=0.02, Kd=1.2, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
 
         # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
@@ -300,21 +274,21 @@ class DroneController(DroneConnection):
         """
         # print("\n--- Incoming XBee Package Processing... ---") # Disabled for too much output
         if "error" in package_data:
-            print(f"  Package processing error: {package_data['error']}")
+            print(f"  Paket işleme hatası: {package_data['error']}")
             if "raw_data_hex" in package_data:
-                print(f"  Raw Data (Hex): {package_data['raw_data_hex']}")
+                print(f"  Ham Veri (Hex): {package_data['raw_data_hex']}")
             if "source_addr" in package_data:
-                print(f"  Source Address: {package_data['source_addr']}")
+                print(f"  Kaynak Adres: {package_data['source_addr']}")
             return
 
         package_type = package_data.get('t')
         sender_id = package_data.get('s') 
         params = package_data.get('p', {})
 
-        # print(f"  Type: {package_type}, Sender: {sender_id}, Parameters: {params}") # Disabled for too much output
+        # print(f"  Tip: {package_type}, Gönderen: {sender_id}, Parametreler: {params}") # Disabled for too much output
 
         if package_type == "G":
-            # GPS data of other drones can be used for APF
+            # Diğer dronların GPS verisi, APF için kullanılabilir
             if sender_id != self.DRONE_ID: # Don't process our own sent package again
                 latitude = params.get('x') / 1000000.0 if params.get('x') is not None else None
                 longitude = params.get('y') / 1000000.0 if params.get('y') is not None else None
@@ -323,7 +297,7 @@ class DroneController(DroneConnection):
                     self.apf_controller.update_other_drone_position(sender_id, latitude, longitude, altitude)
                     # print(f"    Other drone ({sender_id}) GPS data received: Lat={latitude}, Lon={longitude}, Alt={altitude}")
         elif package_type == "H":
-            print(f"    Handshake package received: Sender={sender_id}")
+            print(f"    El sıkışma paketi alındı: Gönderen={sender_id}")
             # Handshake response sending logic can be added
         elif package_type == "W":
             waypoint_id = sender_id
@@ -333,15 +307,15 @@ class DroneController(DroneConnection):
             heading = params.get('h', 0) # Default heading
             if latitude is not None and longitude is not None:
                 self.waypoint_manager.add(waypoint_id, latitude, longitude, altitude, heading)
-                print(f"    Waypoint added/updated: ID={waypoint_id}, Lat={latitude}, Lon={longitude}, Alt={altitude}, Hed={heading}")
+                print(f"    Waypoint eklendi/güncellendi: ID={waypoint_id}, Lat={latitude}, Lon={longitude}, Alt={altitude}, Hed={heading}")
         elif package_type == "w":
             waypoint_id = sender_id
             self.waypoint_manager.remove(waypoint_id)
-            print(f"    Waypoint deletion request received: ID={waypoint_id}")
+            print(f"    Waypoint silme isteği alındı: ID={waypoint_id}")
         elif package_type == "O":
             mission_id = sender_id
             drone_ids = params.get('d', [])
-            print(f"    Mission order received: {params}")
+            print(f"    Görev emri alındı: {params}")
             # Check if our ID is among the drones responsible for the mission
             if self.DRONE_ID in drone_ids:
                 mission_info_for_run = self.missions.get(mission_id)
@@ -349,30 +323,66 @@ class DroneController(DroneConnection):
                     mission_name_for_run = mission_info_for_run['name']
                     await self.run_mission(mission_id, params)
                 else:
-                    print(f"    Error: No name information found for Mission ID {mission_id}. Mission cannot be run.")
+                    print(f"    Hata: Görev ID {mission_id} için isim bilgisi bulunamadı. Görev çalıştırılamıyor.")
             else:
-                print(f"    This drone ({self.DRONE_ID}) is not responsible for the mission.")
+                print(f"    Bu drone ({self.DRONE_ID}) görevden sorumlu değil.")
         elif package_type == "MC":
             mission_id_confirm = params.get('id', 'N/A')
-            print(f"    Mission start confirmation received: Sender={sender_id}, Mission number={mission_id_confirm}")
+            print(f"    Göreve başlama onayı alındı: Gönderen={sender_id}, Görev numarası={mission_id_confirm}")
             # If there is an active mission and we are waiting for confirmation
             if self.current_mission and self.current_mission.mission_id == mission_id_confirm:
                 self.mission_confirmations.add(sender_id)
-                print(f"    Confirmations: {len(self.mission_confirmations)}/{self.required_confirmations}")
+                print(f"    Onaylar: {len(self.mission_confirmations)}/{self.required_confirmations}")
                 if len(self.mission_confirmations) >= self.required_confirmations: 
                     self.current_mission.all_confirmed_event.set()
         elif package_type == "MS":
             status = params.get('status', 'unknown')
-            print(f"    Mission status received: Sender={sender_id}, Status={status}")
+            print(f"    Görev durumu alındı: Gönderen={sender_id}, Durum={status}")
         else:
-            print(f"    Unknown package type received: {package_type}")
+            print(f"    Bilinmeyen paket tipi alındı: {package_type}")
+
+    async def post_takeoff_altitude_check(self, target_altitude: float, tolerance: float, timeout: float):
+        """
+        Havalandıktan sonra drone'un belirli bir irtifaya ulaşıp ulaşmadığını kontrol eder.
+        Belirtilen süre içinde ulaşamazsa iniş yapar.
+        """
+        print(f"[DroneController]: Havalanma sonrası irtifa kontrolü başlatıldı. Hedef: {target_altitude}m, Tolerans: {tolerance}m, Zaman Aşımı: {timeout}s")
+        start_time = time.time()
+        
+        position_async_iterator = self.drone.telemetry.position().__aiter__()
+
+        while time.time() - start_time < timeout:
+            try:
+                position_info = await position_async_iterator.__anext__()
+                current_alt = position_info.absolute_altitude_m
+                
+                print(f"  [DEBUG-Havalanma Kontrolü] Mevcut İrtifa: {current_alt:.2f}m (Hedef: {target_altitude}m)")
+
+                if abs(current_alt - target_altitude) <= tolerance:
+                    print(f"[DroneController]: Havalanma sonrası güvenli irtifaya ulaşıldı ({current_alt:.2f}m).")
+                    return True
+            except StopAsyncIteration:
+                print("[DroneController]: Telemetry akışı sona erdi (havalanma kontrolü).")
+                break
+            except asyncio.CancelledError:
+                print("[DroneController]: Havalanma sonrası irtifa kontrolü iptal edildi.")
+                break
+            except Exception as e:
+                print(f"[DroneController]: Havalanma sonrası irtifa kontrolünde hata: {e}")
+                break
+            await asyncio.sleep(0.5) # Yarım saniyede bir kontrol et
+
+        print(f"[DroneController]: Uyarı: Havalanma sonrası güvenli irtifaya {timeout} saniye içinde ulaşılamadı. Otomatik iniş başlatılıyor.")
+        await self.drone.action.land()
+        print("[DroneController]: Otomatik iniş tamamlandı.")
+        return False
 
 
     async def goto_location(self, target_lat: float, target_lon: float, target_alt: float, target_hed: float) -> bool:
         """
-        Sends the drone to the specified coordinates with PID and APF based velocity control.
-        This function is used internally by goto_waypoint.
-        First reaches the target altitude, then moves horizontally while maintaining altitude.
+        Belirtilen koordinatlara PID ve APF tabanlı hız kontrolü ile drone'u gönderir.
+        Bu fonksiyon, goto_waypoint tarafından dahili olarak kullanılır.
+        Önce hedef irtifaya ulaşır, sonra yatayda hareket ederken irtifayı korur.
         """
         print(f"[DroneController]: Hedef koordinatlara gidiliyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
 
@@ -485,11 +495,11 @@ class DroneController(DroneConnection):
 
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
-                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hız D: {current_vel_down:.2f}m/s") # Added current_vel_down
                 print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
                 print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
                 print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
-                print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}, D={current_vel_down:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}")
 
                 # Has target been reached? (Horizontal and Vertical tolerances)
                 if horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M:
@@ -780,6 +790,9 @@ async def main():
                 print("Drone havalanıyor...")
                 await drone_controller.drone.action.takeoff()
                 print("Drone havalandı.")
+                # Added post-takeoff altitude check
+                # Assuming default takeoff altitude is around 2.5m for initial stability
+                await drone_controller.post_takeoff_altitude_check(target_altitude=2.5, tolerance=0.5, timeout=10) 
             elif command == 'land':
                 print("Drone iniş yapıyor...")
                 await drone_controller.drone.action.land()
