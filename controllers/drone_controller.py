@@ -122,10 +122,13 @@ class DroneController(DroneConnection):
         self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) 
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         # Vertical PID: Tuned for altitude holding
-        # Adjusted Kp, Ki, Kd and output_limits for better stability during climb and hover
-        # Kp reduced, Ki significantly reduced, Kd increased for better damping and less overshoot
-        # KRİTİK DÜZELTME: PID kazançlarının işaretleri ters çevrildi
-        self.pid_down = PID(Kp=-1.5, Ki=-0.0005, Kd=-2.5, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Kp, Ki, Kd values are negative because:
+        #   - If current_alt < target_alt (error = target_alt - current_alt is positive),
+        #     we want vel_down_pid to be negative (move UP). So Kp must be negative.
+        #   - If current_alt > target_alt (error = target_alt - current_alt is negative),
+        #     we want vel_down_pid to be positive (move DOWN). So Kp must be negative.
+        # setpoint will be dynamically updated to target_alt
+        self.pid_down = PID(Kp=-1.0, Ki=-0.01, Kd=-1.0, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
 
         # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
@@ -411,6 +414,9 @@ class DroneController(DroneConnection):
         self.pid_east.reset()
         self.pid_down.reset()
 
+        # KRİTİK DÜZELTME: Dikey PID'nin setpoint'ini hedef irtifaya ayarla
+        self.pid_down.setpoint = target_alt
+
         try:
             position_async_iterator = self.drone.telemetry.position().__aiter__()
             velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
@@ -430,23 +436,22 @@ class DroneController(DroneConnection):
                 current_alt = position_info.absolute_altitude_m
                 current_vel_down = velocity_info.down_m_s
 
-                error_down_m = (target_alt - current_alt) # Hedef irtifası - mevcut irtifa
+                # Hata D sadece loglama için kullanılıyor
+                error_down_m_for_log = (target_alt - current_alt) 
 
-                print(f"  [DEBUG-İrtifa Fazı] Mevcut Alt: {current_alt:.2f}m, Hedef Alt: {target_alt:.2f}m, Hata D: {error_down_m:.2f}m, Mevcut Hız D: {current_vel_down:.2f}m/s")
+                print(f"  [DEBUG-İrtifa Fazı] Mevcut Alt: {current_alt:.2f}m, Hedef Alt: {target_alt:.2f}m, Hata D: {error_down_m_for_log:.2f}m, Mevcut Hız D: {current_vel_down:.2f}m/s")
                 
                 # PID bileşenlerini al ve yazdır
                 p_term, i_term, d_term = self.pid_down.components
                 print(f"  [DEBUG-İrtifa Fazı] PID Bileşenleri (P, I, D): ({p_term:.2f}, {i_term:.2f}, {d_term:.2f})")
 
                 # Check if target altitude is reached and stable
-                if abs(error_down_m) < ALT_TOLERANCE_M and abs(current_vel_down) < SPEED_TOLERANCE:
+                if abs(error_down_m_for_log) < ALT_TOLERANCE_M and abs(current_vel_down) < SPEED_TOLERANCE:
                     print("[DroneController]: Hedef irtifaya ulaşıldı ve stabil.")
                     break
 
-                # Calculate vertical velocity command using PID (input is error_down_m)
-                # Note: simple-pid takes current_value, calculates error against setpoint.
-                # If setpoint is 0, then input is effectively the error.
-                vel_down_pid = self.pid_down(-error_down_m) # Error direction inverted for down velocity
+                # KRİTİK DÜZELTME: Dikey hız komutunu PID'ye current_alt'ı vererek hesapla
+                vel_down_pid = self.pid_down(current_alt) 
 
                 # Dikey hızı sınırla (simple-pid output_limits ile de sınırlanır, bu ek bir güvenlik)
                 max_vertical_vel = 5.0 # m/s
@@ -456,9 +461,9 @@ class DroneController(DroneConnection):
                 print(f"  [DEBUG-İrtifa Fazı] PID Çıkışı (vel_down_pid): {vel_down_pid:.2f}m/s") # Added debug for PID output
 
                 # Sadece dikey hız komutu gönder, yatayda sabit kal
-                # KRİTİK DÜZELTME: vel_down_pid'in işareti ters çevrildi
+                # KRİTİK DÜZELTME: vel_down_pid'in önündeki eksi işareti kaldırıldı
                 await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(0.0, 0.0, -vel_down_pid, target_hed)
+                    offboard.VelocityNedYaw(0.0, 0.0, vel_down_pid, target_hed)
                 )
                 await asyncio.sleep(self.pid_down.sample_time) # Use PID's sample time
 
@@ -467,7 +472,7 @@ class DroneController(DroneConnection):
             # Reset horizontal PIDs (they were not used in altitude phase)
             self.pid_north.reset()
             self.pid_east.reset()
-            # self.pid_down.reset() # Do not reset vertical PID, it should continue holding altitude
+            # pid_down'ın setpoint'i zaten ayarlı ve kullanılmaya devam edecek
 
             while not self._stop_tasks_event.is_set():
                 try:
@@ -493,21 +498,21 @@ class DroneController(DroneConnection):
                 error_north_m = (target_lat - current_lat) * lat_to_m
                 error_east_m = (target_lon - current_lon) * lon_to_m
                 
-                # Dikey hata (irtifayı korumak için)
-                error_down_m = (target_alt - current_alt)
+                # Dikey hata (irtifayı korumak için) - sadece loglama için
+                error_down_m_for_log = (target_alt - current_alt)
 
                 horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
                 
                 print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hız D: {current_vel_down:.2f}m/s") 
                 print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
-                print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m:.2f}")
+                print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m_for_log:.2f}")
                 print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
                 print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}")
 
                 # Has target been reached? (Horizontal and Vertical tolerances)
-                if horizontal_distance < TOLERANCE_M and abs(error_down_m) < ALT_TOLERANCE_M:
+                if horizontal_distance < TOLERANCE_M and abs(error_down_m_for_log) < ALT_TOLERANCE_M:
                     # Try to keep the drone fixed at the target point
-                    print(f"[DroneController]: Hedefe {horizontal_distance:.2f}m yatayda ve {abs(error_down_m):.2f}m dikeyde ulaşıldı. Sabitleniyor...")
+                    print(f"[DroneController]: Hedefe {horizontal_distance:.2f}m yatayda ve {abs(error_down_m_for_log):.2f}m dikeyde ulaşıldı. Sabitleniyor...")
                     for _ in range(10): # Wait for 1 second (0.1s * 10) to stabilize
                         await self.drone.offboard.set_velocity_ned(
                             offboard.VelocityNedYaw(0.0, 0.0, 0.0, target_hed)
@@ -519,8 +524,8 @@ class DroneController(DroneConnection):
                 # Calculate PID outputs (velocity commands)
                 vel_north_pid = self.pid_north(error_north_m)
                 vel_east_pid = self.pid_east(error_east_m)
-                # Use PID for vertical velocity control, also add vertical avoidance from APF
-                vel_down_pid = self.pid_down(-error_down_m) # Error direction inverted
+                # Use PID for vertical velocity control
+                vel_down_pid = self.pid_down(current_alt) # KRİTİK DÜZELTME: Input is current_alt
 
                 # PID bileşenlerini al ve yazdır (yatay faz için de)
                 p_term_n, i_term_n, d_term_n = self.pid_north.components
@@ -568,9 +573,9 @@ class DroneController(DroneConnection):
                 
                 print(f"  [DEBUG-Yatay Fazı] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
 
-                # KRİTİK DÜZELTME: command_vel_down'ın işareti ters çevrildi
+                # KRİTİK DÜZELTME: command_vel_down'ın önündeki eksi işareti kaldırıldı
                 await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, -command_vel_down, target_hed)
+                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
                 )
                 
                 await asyncio.sleep(self.pid_north.sample_time) # Use horizontal PID's sample time
