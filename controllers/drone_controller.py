@@ -8,6 +8,7 @@ import os
 import importlib.util
 import math
 import sys
+import dataclasses # Add this import
 
 # Projenin kök dizinini Python yoluna ekle
 # Bu, 'connect' ve 'controllers' gibi kardeş dizinlerdeki modüllerin bulunmasını sağlar.
@@ -118,20 +119,28 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Number of confirmations expected for the mission
 
         # PID controllers (tuned values) - using simple-pid
-        # Horizontal PID
         self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) 
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
+        
         # Vertical PID: Tuned for altitude holding
-        # Kp, Ki, Kd values are negative because:
-        #   - If current_alt < target_alt (error = target_alt - current_alt is positive),
-        #     we want vel_down_pid to be negative (move UP). So Kp must be negative.
-        #   - If current_alt > target_alt (error = target_alt - current_alt is negative),
-        #     we want vel_down_pid to be positive (move DOWN). So Kp must be negative.
-        # setpoint will be dynamically updated to target_alt
-        self.pid_down = PID(Kp=-1.0, Ki=-0.01, Kd=-1.0, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  # Tuned
+        # Kp, Ki, Kd values are negative because simple-pid's error = setpoint - current_value.
+        # If current_alt < target_alt, error is positive (need to go UP). MAVSDK down_m_s for UP is negative.
+        # So, positive error needs negative output. Hence, negative Kp.
+        self.pid_down = PID(Kp=-1.5, Ki=-0.005, Kd=-2.5, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))
 
-        # Max horizontal speed of the drone is maintained
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
+
+        # New: Target position for the continuous offboard control loop
+        # Using a dataclass for better structure and explicit fields including heading
+        @dataclasses.dataclass
+        class TargetPosition:
+            latitude_deg: float
+            longitude_deg: float
+            absolute_altitude_m: float
+            yaw_deg: float # Added yaw_deg for target heading
+        
+        self._target_position: TargetPosition | None = None # Initialize as None
+        self._offboard_control_task = None # Task for continuous offboard control
 
 
     async def connect(self) -> None:
@@ -144,13 +153,12 @@ class DroneController(DroneConnection):
         print(f"[DroneController]: XBee device is being initialized via {self.xbee_port}...")
         self.xbee_controller = XBeeController(self.xbee_port)
         if not self.xbee_controller.connected:
-            print("[DroneController]: Could not connect to XBee device. XBee communication disabled.")
-            # If XBee connection fails, do not start other XBee dependent tasks
-            return
-        
-        print("[DroneController]: XBee connection successful. Data listening is starting.")
-        # Start the asynchronous task that listens for data from XBee
-        self._xbee_receive_task = asyncio.create_task(self._xbee_receive_loop())
+            print("[DroneController]: Could not connect to XBee device. XBee communication disabled. Continuing without XBee.")
+            # Do NOT return or sys.exit(1) here. Just warn.
+        else:
+            print("[DroneController]: XBee connection successful. Data listening is starting.")
+            # Start the asynchronous task that listens for data from XBee
+            self._xbee_receive_task = asyncio.create_task(self._xbee_receive_loop())
 
         # Start the task that monitors the drone's armed status
         self._monitor_armed_state_task = asyncio.create_task(self._monitor_armed_state()) # Task reference is held
@@ -187,6 +195,12 @@ class DroneController(DroneConnection):
             try: await self._monitor_armed_state_task
             except asyncio.CancelledError: pass
 
+        # Cancel and wait for the new offboard control task
+        if self._offboard_control_task and not self._offboard_control_task.done():
+            self._offboard_control_task.cancel()
+            try: await self._offboard_control_task
+            except asyncio.CancelledError: pass
+
         # Close XBee Controller
         if self.xbee_controller:
             self.xbee_controller.disconnect()
@@ -195,7 +209,7 @@ class DroneController(DroneConnection):
 
 
     async def _monitor_armed_state(self) -> None:
-        """Monitors the drone's armed status and starts/stops the GPS sending task."""
+        """Monitors the drone's armed status and starts/stops the GPS sending and offboard control tasks."""
         print("[DroneController]: Drone armed status is being monitored...")
         try:
             async for is_armed in self.drone.telemetry.armed():
@@ -203,16 +217,22 @@ class DroneController(DroneConnection):
                     break # Exit loop if shutdown signal received
 
                 if is_armed and not self._drone_armed_event.is_set():
-                    print("[DroneController]: Drone armed. Starting GPS data transmission.")
+                    print("[DroneController]: Drone armed. Starting GPS data transmission and Offboard control loop.")
                     self._drone_armed_event.set()
                     if not self._gps_send_task or self._gps_send_task.done():
                         self._gps_send_task = asyncio.create_task(self._send_gps_data_loop())
+                    if not self._offboard_control_task or self._offboard_control_task.done():
+                        self._offboard_control_task = asyncio.create_task(self._run_offboard_control_loop())
                 elif not is_armed and self._drone_armed_event.is_set():
-                    print("[DroneController]: Drone disarmed. Stopping GPS data transmission.")
+                    print("[DroneController]: Drone disarmed. Stopping GPS data transmission and Offboard control loop.")
                     self._drone_armed_event.clear()
                     if self._gps_send_task and not self._gps_send_task.done():
                         self._gps_send_task.cancel()
                         try: await self._gps_send_task
+                        except asyncio.CancelledError: pass
+                    if self._offboard_control_task and not self._offboard_control_task.done():
+                        self._offboard_control_task.cancel()
+                        try: await self._offboard_control_task
                         except asyncio.CancelledError: pass
         except asyncio.CancelledError:
             print("[DroneController]: Armed status monitoring task cancelled.")
@@ -245,7 +265,8 @@ class DroneController(DroneConnection):
                         "a": int(alt * 100) # Send altitude in centimeters
                     }
                 )
-                self.xbee_controller.send(gps_package)
+                if self.xbee_controller and self.xbee_controller.connected:
+                    self.xbee_controller.send(gps_package)
                 await asyncio.sleep(1) # Send every second
         except asyncio.CancelledError:
             print("[DroneController]: GPS data transmission loop cancelled.")
@@ -260,7 +281,7 @@ class DroneController(DroneConnection):
         """
         print("[DroneController]: XBee data reception loop started.")
         try:
-            while not self._stop_tasks_event.is_set() and self.xbee_controller.connected:
+            while not self._stop_tasks_event.is_set() and self.xbee_controller and self.xbee_controller.connected:
                 incoming_package_json = self.xbee_controller.receive()
                 if incoming_package_json:
                     await self._process_xbee_package(incoming_package_json)
@@ -346,14 +367,216 @@ class DroneController(DroneConnection):
         else:
             print(f"    Bilinmeyen paket tipi alındı: {package_type}")
 
+    async def _run_offboard_control_loop(self) -> None:
+        """
+        Continuous offboard control loop that moves the drone to self._target_position.
+        """
+        print("[DroneController]: Offboard control loop started.")
+        # Ensure offboard mode is started initially
+        await self.drone.offboard.set_velocity_ned(offboard.VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
+        try:
+            await self.drone.offboard.start()
+            print("[DroneController]: Offboard mode initiated for continuous control.")
+        except offboard.OffboardError as error:
+            print(f"[DroneController]: Offboard mode could not be started for continuous control: {error}")
+            return # Cannot proceed without offboard
+
+        position_async_iterator = self.drone.telemetry.position().__aiter__()
+        velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
+        heading_async_iterator = self.drone.telemetry.heading().__aiter__() # New: for current heading
+
+        TOLERANCE_M = 1.0 # Horizontal target proximity tolerance (meters)
+        ALT_TOLERANCE_M = 0.5 # Altitude tolerance (meters)
+        SPEED_TOLERANCE = 0.5 # Speed tolerance (m/s)
+
+        lat_to_m = 111320.0 # Approx 1 degree latitude ~ 111320 meters
+
+        try:
+            while not self._stop_tasks_event.is_set() and self._drone_armed_event.is_set():
+                try:
+                    current_position = await position_async_iterator.__anext__()
+                    current_velocity = await velocity_async_iterator.__anext__()
+                    current_heading = await heading_async_iterator.__anext__() # Get current heading
+                except StopAsyncIteration:
+                    print("[DroneController]: Telemetry akışı sona erdi (offboard kontrol döngüsü).")
+                    break
+                except asyncio.CancelledError:
+                    raise # Propagate cancellation
+
+                current_lat = current_position.latitude_deg
+                current_lon = current_position.longitude_deg
+                current_alt = current_position.absolute_altitude_m
+                current_yaw = current_heading.heading_deg # Current yaw for logging
+                current_vel_north = current_velocity.north_m_s
+                current_vel_east = current_velocity.east_m_s
+                current_vel_down = current_velocity.down_m_s
+
+                command_vel_north = 0.0
+                command_vel_east = 0.0
+                command_vel_down = 0.0
+                command_yaw_rate = 0.0 # Control yaw rate instead of absolute yaw
+
+                if self._target_position:
+                    target_lat = self._target_position.latitude_deg
+                    target_lon = self._target_position.longitude_deg
+                    target_alt = self._target_position.absolute_altitude_m
+                    target_hed = self._target_position.yaw_deg # Target heading
+
+                    # Update setpoint for vertical PID
+                    self.pid_down.setpoint = target_alt
+                    # Update setpoints for horizontal PIDs (they are already 0, but can be set to target_lat/lon if we want position PID)
+                    # For velocity control, setpoint is 0, input is error.
+                    # The setpoint for pid_north/east is 0, so input should be the error.
+                    # If error_north_m is positive (target is North), we want positive north velocity.
+                    # So Kp should be positive.
+                    vel_north_pid = self.pid_north(current_lat) # Input is current latitude, setpoint is target latitude
+                    vel_east_pid = self.pid_east(current_lon) # Input is current longitude, setpoint is target longitude
+                    vel_down_pid = self.pid_down(current_alt) # Input is current altitude, setpoint is target_alt
+
+                    # Yaw control (simple P controller for heading)
+                    # Calculate shortest angle difference
+                    yaw_error = target_hed - current_yaw
+                    yaw_error = (yaw_error + 180) % 360 - 180 # Normalize to -180 to 180
+                    kp_yaw = 0.5 # Proportional gain for yaw
+                    command_yaw_rate = kp_yaw * yaw_error
+                    # Limit yaw rate
+                    max_yaw_rate = 60.0 # deg/s
+                    if abs(command_yaw_rate) > max_yaw_rate:
+                        command_yaw_rate = math.copysign(max_yaw_rate, command_yaw_rate)
+
+
+                    # Debugging outputs
+                    p_term_n, i_term_n, d_term_n = self.pid_north.components
+                    p_term_e, i_term_e, d_term_e = self.pid_east.components
+                    p_term_d, i_term_d, d_term_d = self.pid_down.components
+                    print(f"  [DEBUG-Kontrol Döngüsü] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hed={current_yaw:.2f}deg, Hız D: {current_vel_down:.2f}m/s")
+                    print(f"  [DEBUG-Kontrol Döngüsü] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m, Hed={target_hed:.2f}deg")
+                    print(f"  [DEBUG-Kontrol Döngüsü] Hata (m): N={(target_lat - current_lat) * lat_to_m:.2f}, E={(target_lon - current_lon) * lon_to_m:.2f}, D={target_alt - current_alt:.2f}, Yaw={yaw_error:.2f}deg") # Log actual errors
+                    print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (N-P, I, D): ({p_term_n:.2f}, {i_term_n:.2f}, {d_term_n:.2f})")
+                    print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (E-P, I, D): ({p_term_e:.2f}, {i_term_e:.2f}, {d_term_e:.2f})")
+                    print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (D-P, I, D): ({p_term_d:.2f}, {i_term_d:.2f}, {d_term_d:.2f})")
+                    print(f"  [DEBUG-Kontrol Döngüsü] PID Çıkışları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}, Yaw Rate={command_yaw_rate:.2f}")
+
+                    # Calculate avoidance vectors from APF
+                    avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
+                        current_lat, current_lon, current_alt
+                    )
+                    print(f"  [DEBUG-Kontrol Döngüsü] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
+
+                    # Combine PID outputs and APF avoidance
+                    command_vel_north = vel_north_pid + avoid_north
+                    command_vel_east = vel_east_pid + avoid_east
+                    command_vel_down = vel_down_pid + avoid_down # PID output is already correctly signed for down_m_s
+
+                    # Limit overall velocity commands
+                    current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
+                    if current_horizontal_command_speed > self.drone_speed:
+                        scale_factor = self.drone_speed / current_horizontal_command_speed
+                        command_vel_north *= scale_factor
+                        command_vel_east *= scale_factor
+                    
+                    max_vertical_vel = 5.0 # m/s
+                    if abs(command_vel_down) > max_vertical_vel:
+                        command_vel_down = math.copysign(max_vertical_vel, command_vel_down) 
+
+                    overall_max_vel = 5.0 # m/s (This is the maximum magnitude of the combined velocity vector)
+                    current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
+                    if current_overall_command_speed > overall_max_vel:
+                        scale_factor = overall_max_vel / current_overall_command_speed
+                        command_vel_north *= scale_factor
+                        command_vel_east *= scale_factor
+                        command_vel_down *= scale_factor
+                    
+                    print(f"  [DEBUG-Kontrol Döngüsü] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw Rate={command_yaw_rate:.2f}")
+
+                    await self.drone.offboard.set_velocity_ned(
+                        offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, command_yaw_rate)
+                    )
+                else:
+                    # If no target position is set, hover at current position
+                    await self.drone.offboard.set_velocity_ned(
+                        offboard.VelocityNedYaw(0.0, 0.0, 0.0, 0.0)
+                    )
+                    print("[DroneController]: Hedef konum ayarlanmadı, drone mevcut konumda sabitleniyor.")
+                
+                await asyncio.sleep(self.pid_down.sample_time) # Use PID's sample time for loop frequency
+
+        except asyncio.CancelledError:
+            print("[DroneController]: Offboard control loop cancelled.")
+        except Exception as e:
+            print(f"[DroneController]: Error in offboard control loop: {e}")
+        finally:
+            # Stop offboard mode when the loop exits
+            try:
+                await self.drone.offboard.stop()
+                print("[DroneController]: Offboard mode stopped.")
+            except offboard.OffboardError as error:
+                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
+            self._target_position = None # Clear target position
+
+
+    async def goto_location(self, target_lat: float, target_lon: float, target_alt: float, target_hed: float) -> bool:
+        """
+        Updates the target position for the continuous offboard control loop.
+        """
+        print(f"[DroneController]: Hedef koordinat güncelleniyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
+        
+        # Using the nested TargetPosition dataclass for _target_position
+        @dataclasses.dataclass
+        class TargetPosition:
+            latitude_deg: float
+            longitude_deg: float
+            absolute_altitude_m: float
+            yaw_deg: float
+
+        self._target_position = TargetPosition(target_lat, target_lon, target_alt, target_hed)
+        
+        # Ensure offboard control loop is running (it should be started by armed state monitor)
+        if not self._offboard_control_task or self._offboard_control_task.done():
+            print("[DroneController]: Offboard control loop is not running, attempting to start it.")
+            self._offboard_control_task = asyncio.create_task(self._run_offboard_control_loop())
+            await asyncio.sleep(0.5) # Give it a moment to start
+
+        print("[DroneController]: Hedef koordinat başarıyla ayarlandı. Drone hedefe doğru hareket edecek.")
+        return True
+
+
     async def post_takeoff_altitude_check(self, target_altitude: float, tolerance: float, timeout: float):
         """
-        Havalandıktan sonra drone'un belirli bir irtifaya ulaşıp ulaşmadığını kontrol eder.
+        Havalanma sonrası drone'un belirli bir irtifaya ulaşıp ulaşmadığını kontrol eder.
         Belirtilen süre içinde ulaşamazsa iniş yapar.
+        Bu fonksiyon, drone'un _target_position'ı takip ettiğini varsayar.
         """
         print(f"[DroneController]: Havalanma sonrası irtifa kontrolü başlatıldı. Hedef: {target_altitude}m, Tolerans: {tolerance}m, Zaman Aşımı: {timeout}s")
         start_time = time.time()
         
+        # Set the initial target position to the takeoff altitude and current lat/lon/heading
+        current_pos_telemetry = None
+        current_heading_telemetry = None
+        try:
+            current_pos_telemetry = await self.drone.telemetry.position().__anext__()
+            current_heading_telemetry = await self.drone.telemetry.heading().__anext__()
+            
+            # Use the nested TargetPosition dataclass
+            @dataclasses.dataclass
+            class TargetPosition:
+                latitude_deg: float
+                longitude_deg: float
+                absolute_altitude_m: float
+                yaw_deg: float
+            
+            self._target_position = TargetPosition(
+                current_pos_telemetry.latitude_deg,
+                current_pos_telemetry.longitude_deg,
+                target_altitude,
+                current_heading_telemetry.heading_deg # Use current heading for initial hover
+            )
+            print(f"[DroneController]: Başlangıç hedef irtifa ve konum ayarlandı: Lat={self._target_position.latitude_deg:.6f}, Lon={self._target_position.longitude_deg:.6f}, Alt={self._target_position.absolute_altitude_m:.2f}m, Hed={self._target_position.yaw_deg:.2f}deg")
+        except Exception as e:
+            print(f"[DroneController]: Başlangıç irtifa hedefi ayarlanamadı: {e}. Kontrol devam ediyor.")
+            await self.drone.action.land() # Force landing if initial target cannot be set
+            return False
+
         position_async_iterator = self.drone.telemetry.position().__aiter__()
 
         while time.time() - start_time < timeout:
@@ -381,218 +604,6 @@ class DroneController(DroneConnection):
         await self.drone.action.land()
         print("[DroneController]: Otomatik iniş tamamlandı.")
         return False
-
-
-    async def goto_location(self, target_lat: float, target_lon: float, target_alt: float, target_hed: float) -> bool:
-        """
-        Belirtilen koordinatlara PID ve APF tabanlı hız kontrolü ile drone'u gönderir.
-        Bu fonksiyon, goto_waypoint tarafından dahili olarak kullanılır.
-        Önce hedef irtifaya ulaşır, sonra yatayda hareket ederken irtifayı korur.
-        """
-        print(f"[DroneController]: Hedef koordinatlara gidiliyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
-
-        # Offboard modunu başlat
-        # Başlangıçta drone'un mevcut konumunda kalması için sıfır hız komutu gönder
-        await self.drone.offboard.set_velocity_ned(
-            offboard.VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
-        try:
-            await self.drone.offboard.start()
-            print("[DroneController]: Offboard modu başlatıldı.")
-        except offboard.OffboardError as error:
-            print(f"[DroneController]: Offboard mod başlatılamadı: {error}")
-            return False
-
-        TOLERANCE_M = 1.0 # Yatay hedefe yakınlık toleransı (metre)
-        ALT_TOLERANCE_M = 0.5 # İrtifa toleransı (metre)
-        SPEED_TOLERANCE = 0.5 # Hız toleransı (m/s)
-        
-        # Yaklaşık 1 derece enlem ~ 111320 metre
-        lat_to_m = 111320.0
-        
-        # Reset PID controllers
-        self.pid_north.reset()
-        self.pid_east.reset()
-        self.pid_down.reset()
-
-        # KRİTİK DÜZELTME: Dikey PID'nin setpoint'ini hedef irtifaya ayarla
-        self.pid_down.setpoint = target_alt
-
-        try:
-            position_async_iterator = self.drone.telemetry.position().__aiter__()
-            velocity_async_iterator = self.drone.telemetry.velocity_ned().__aiter__()
-
-            # --- FAZ 1: Hedef irtifaya ulaş ---
-            print("[DroneController]: Hedef irtifaya çıkılıyor/iniliyor...")
-            while not self._stop_tasks_event.is_set():
-                try:
-                    position_info = await position_async_iterator.__anext__()
-                    velocity_info = await velocity_async_iterator.__anext__()
-                except StopAsyncIteration:
-                    print("[DroneController]: Telemetry akışı sona erdi (irtifa fazı).")
-                    break
-                except asyncio.CancelledError:
-                    raise
-
-                current_alt = position_info.absolute_altitude_m
-                current_vel_down = velocity_info.down_m_s
-
-                # Hata D sadece loglama için kullanılıyor
-                error_down_m_for_log = (target_alt - current_alt) 
-
-                print(f"  [DEBUG-İrtifa Fazı] Mevcut Alt: {current_alt:.2f}m, Hedef Alt: {target_alt:.2f}m, Hata D: {error_down_m_for_log:.2f}m, Mevcut Hız D: {current_vel_down:.2f}m/s")
-                
-                # PID bileşenlerini al ve yazdır
-                p_term, i_term, d_term = self.pid_down.components
-                print(f"  [DEBUG-İrtifa Fazı] PID Bileşenleri (P, I, D): ({p_term:.2f}, {i_term:.2f}, {d_term:.2f})")
-
-                # Check if target altitude is reached and stable
-                if abs(error_down_m_for_log) < ALT_TOLERANCE_M and abs(current_vel_down) < SPEED_TOLERANCE:
-                    print("[DroneController]: Hedef irtifaya ulaşıldı ve stabil.")
-                    break
-
-                # KRİTİK DÜZELTME: Dikey hız komutunu PID'ye current_alt'ı vererek hesapla
-                vel_down_pid = self.pid_down(current_alt) 
-
-                # Dikey hızı sınırla (simple-pid output_limits ile de sınırlanır, bu ek bir güvenlik)
-                max_vertical_vel = 5.0 # m/s
-                if abs(vel_down_pid) > max_vertical_vel:
-                    vel_down_pid = math.copysign(max_vertical_vel, vel_down_pid) 
-
-                print(f"  [DEBUG-İrtifa Fazı] PID Çıkışı (vel_down_pid): {vel_down_pid:.2f}m/s") # Added debug for PID output
-
-                # Sadece dikey hız komutu gönder, yatayda sabit kal
-                # KRİTİK DÜZELTME: vel_down_pid'in önündeki eksi işareti kaldırıldı
-                await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(0.0, 0.0, vel_down_pid, target_hed)
-                )
-                await asyncio.sleep(self.pid_down.sample_time) # Use PID's sample time
-
-            # --- FAZ 2: Hedef irtifada yatayda hareket et ---
-            print("[DroneController]: Yatay harekete başlanıyor, irtifa korunacak.")
-            # Reset horizontal PIDs (they were not used in altitude phase)
-            self.pid_north.reset()
-            self.pid_east.reset()
-            # pid_down'ın setpoint'i zaten ayarlı ve kullanılmaya devam edecek
-
-            while not self._stop_tasks_event.is_set():
-                try:
-                    position_info = await position_async_iterator.__anext__()
-                    velocity_info = await velocity_async_iterator.__anext__()
-                except StopAsyncIteration:
-                    print("[DroneController]: Telemetry akışı sona erdi (yatay fazı).")
-                    break
-                except asyncio.CancelledError:
-                    raise
-
-                current_lat = position_info.latitude_deg
-                current_lon = position_info.longitude_deg
-                current_alt = position_info.absolute_altitude_m
-
-                current_vel_north = velocity_info.north_m_s
-                current_vel_east = velocity_info.east_m_s
-                current_vel_down = velocity_info.down_m_s
-
-                lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
-
-                # Yatay hatalar
-                error_north_m = (target_lat - current_lat) * lat_to_m
-                error_east_m = (target_lon - current_lon) * lon_to_m
-                
-                # Dikey hata (irtifayı korumak için) - sadece loglama için
-                error_down_m_for_log = (target_alt - current_alt)
-
-                horizontal_distance = math.sqrt(error_north_m**2 + error_east_m**2)
-                
-                print(f"  [DEBUG-Yatay Fazı] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hız D: {current_vel_down:.2f}m/s") 
-                print(f"  [DEBUG-Yatay Fazı] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m")
-                print(f"  [DEBUG-Yatay Fazı] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={error_down_m_for_log:.2f}")
-                print(f"  [DEBUG-Yatay Fazı] Yatay Mesafe: {horizontal_distance:.2f}m")
-                print(f"  [DEBUG-Yatay Fazı] Mevcut Hız (m/s): N={current_vel_north:.2f}, E={current_vel_east:.2f}")
-
-                # Has target been reached? (Horizontal and Vertical tolerances)
-                if horizontal_distance < TOLERANCE_M and abs(error_down_m_for_log) < ALT_TOLERANCE_M:
-                    # Try to keep the drone fixed at the target point
-                    print(f"[DroneController]: Hedefe {horizontal_distance:.2f}m yatayda ve {abs(error_down_m_for_log):.2f}m dikeyde ulaşıldı. Sabitleniyor...")
-                    for _ in range(10): # Wait for 1 second (0.1s * 10) to stabilize
-                        await self.drone.offboard.set_velocity_ned(
-                            offboard.VelocityNedYaw(0.0, 0.0, 0.0, target_hed)
-                        )
-                        await asyncio.sleep(0.1)
-                    print("[DroneController]: Drone sabitlendi. Görev tamamlandı.")
-                    break # Exit loop
-
-                # Calculate PID outputs (velocity commands)
-                vel_north_pid = self.pid_north(error_north_m)
-                vel_east_pid = self.pid_east(error_east_m)
-                # Use PID for vertical velocity control
-                vel_down_pid = self.pid_down(current_alt) # KRİTİK DÜZELTME: Input is current_alt
-
-                # PID bileşenlerini al ve yazdır (yatay faz için de)
-                p_term_n, i_term_n, d_term_n = self.pid_north.components
-                p_term_e, i_term_e, d_term_e = self.pid_east.components
-                p_term_d, i_term_d, d_term_d = self.pid_down.components
-                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (N-P, I, D): ({p_term_n:.2f}, {i_term_n:.2f}, {d_term_n:.2f})")
-                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (E-P, I, D): ({p_term_e:.2f}, {i_term_e:.2f}, {d_term_e:.2f})")
-                print(f"  [DEBUG-Yatay Fazı] PID Bileşenleri (D-P, I, D): ({p_term_d:.2f}, {i_term_d:.2f}, {d_term_d:.2f})")
-
-
-                # Calculate avoidance vectors from APF
-                avoid_north, avoid_east, avoid_down = self.apf_controller.calculate_avoidance_vector(
-                    current_lat, current_lon, current_alt
-                )
-
-                print(f"  [DEBUG-Yatay Fazı] PID Çıkışları: N={vel_north_pid:.2f}, E={vel_east_pid:.2f}, D={vel_down_pid:.2f}")
-                print(f"  [DEBUG-Yatay Fazı] APF Kaçınma: N={avoid_north:.2f}, E={avoid_east:.2f}, D={avoid_down:.2f}")
-
-                # Calculate final velocity commands: PID outputs + APF avoidance
-                command_vel_north = vel_north_pid + avoid_north
-                command_vel_east = vel_east_pid + avoid_east
-                command_vel_down = vel_down_pid + avoid_down # Command from vertical PID + APF
-
-                # Print raw D command (before limiting)
-                print(f"  [DEBUG-Yatay Fazı] Ham D Komutu (sınırlamadan önce): {command_vel_down:.2f}")
-
-                # Limit velocity commands
-                current_horizontal_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2)
-                if current_horizontal_command_speed > self.drone_speed:
-                    scale_factor = self.drone_speed / current_horizontal_command_speed
-                    command_vel_north *= scale_factor
-                    command_vel_east *= scale_factor
-                
-                max_vertical_vel = 5.0 # m/s
-                if abs(command_vel_down) > max_vertical_vel:
-                    command_vel_down = math.copysign(max_vertical_vel, command_vel_down) 
-
-                overall_max_vel = 5.0 # m/s
-                current_overall_command_speed = math.sqrt(command_vel_north**2 + command_vel_east**2 + command_vel_down**2)
-                if current_overall_command_speed > overall_max_vel:
-                    scale_factor = overall_max_vel / current_overall_command_speed
-                    command_vel_north *= scale_factor
-                    command_vel_east *= scale_factor
-                    command_vel_down *= scale_factor
-                
-                print(f"  [DEBUG-Yatay Fazı] Nihai Hız Komutu: N={command_vel_north:.2f}, E={command_vel_east:.2f}, D={command_vel_down:.2f}, Yaw={target_hed:.2f}")
-
-                # KRİTİK DÜZELTME: command_vel_down'ın önündeki eksi işareti kaldırıldı
-                await self.drone.offboard.set_velocity_ned(
-                    offboard.VelocityNedYaw(command_vel_north, command_vel_east, command_vel_down, target_hed)
-                )
-                
-                await asyncio.sleep(self.pid_north.sample_time) # Use horizontal PID's sample time
-
-        except asyncio.CancelledError:
-            print("[DroneController]: Hedef koordinatlara gitme görevi iptal edildi.")
-        except Exception as e:
-            print(f"[DroneController]: Hedef koordinatlara gitme görevinde hata: {e}")
-        finally:
-            # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
-            try:
-                await self.drone.offboard.stop()
-                print("[DroneController]: Offboard modu durduruldu.")
-            except offboard.OffboardError as error:
-                print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
-            self.current_mission = None # Görev tamamlandığında veya başarısız olduğunda sıfırla
-            return True # Görev tamamlandı veya iptal edildi
 
 
     async def goto_waypoint(self, waypoint_id: str) -> bool:
@@ -705,7 +716,8 @@ class DroneController(DroneConnection):
                 sender=self.DRONE_ID,
                 params={"status": "successful", "mission_id": mission_id}
             )
-            self.xbee_controller.send(status_package)
+            if self.xbee_controller and self.xbee_controller.connected:
+                self.xbee_controller.send(status_package)
             return True
         except asyncio.CancelledError:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) iptal edildi.")
@@ -714,7 +726,8 @@ class DroneController(DroneConnection):
                 sender=self.DRONE_ID,
                 params={"status": "cancelled", "mission_id": mission_id}
             )
-            self.xbee_controller.send(status_package)
+            if self.xbee_controller and self.xbee_controller.connected:
+                self.xbee_controller.send(status_package)
             return False
         except Exception as e:
             print(f"[DroneController]: Görev '{mission_id}' ({mission_name}) çalıştırılırken hata oluştu: {e}")
@@ -723,7 +736,8 @@ class DroneController(DroneConnection):
                 sender=self.DRONE_ID,
                 params={"status": "failed", "mission_id": mission_id, "error": str(e)}
             )
-            self.xbee_controller.send(status_package)
+            if self.xbee_controller and self.xbee_controller.connected:
+                self.xbee_controller.send(status_package)
             return False
         finally:
             # Offboard modunu durdur (görev tamamlandığında veya hata oluştuğunda)
@@ -764,9 +778,11 @@ async def main():
     try:
         await drone_controller.connect()
 
-        if drone_controller.xbee_controller and not drone_controller.xbee_controller.connected:
-            print("XBee bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
-            return
+        # XBee warning is handled inside connect method now
+        # No need for this block:
+        # if drone_controller.xbee_controller and not drone_controller.xbee_controller.connected:
+        #     print("XBee bağlantı sorunları nedeniyle uygulama sonlandırılıyor.")
+        #     return
 
         print("\nDrone Controller başarıyla başlatıldı.")
         def print_help():
@@ -800,21 +816,19 @@ async def main():
                 await drone_controller.drone.action.takeoff()
                 print("Drone havalandı.")
                 
-                # Takeoff sonrası ek bekleme
-                await asyncio.sleep(10) # Drone'a havalanması için 10 saniye süre ver
-
-                # Anlık irtifa kontrolü
-                try:
-                    current_pos = await drone_controller.drone.telemetry.position().__anext__()
-                    print(f"[DroneController]: Havalanma sonrası anlık irtifa: {current_pos.absolute_altitude_m:.2f}m")
-                except Exception as e:
-                    print(f"[DroneController]: Anlık irtifa alınamadı: {e}")
-
-                # Added post-takeoff altitude check
-                # Assuming default takeoff altitude is around 2.5m for initial stability
-                await drone_controller.post_takeoff_altitude_check(target_altitude=2.5, tolerance=0.5, timeout=10) 
+                # The post_takeoff_altitude_check will now set the initial hover target.
+                # The continuous offboard loop will then maintain this.
+                # Increased timeout for takeoff check as it now involves hovering.
+                await drone_controller.post_takeoff_altitude_check(target_altitude=2.5, tolerance=0.5, timeout=15) 
             elif command == 'land':
                 print("Drone iniş yapıyor...")
+                # Ensure offboard control loop is stopped before landing
+                if drone_controller._offboard_control_task and not drone_controller._offboard_control_task.done():
+                    drone_controller._offboard_control_task.cancel()
+                    try: await drone_controller._offboard_control_task
+                    except asyncio.CancelledError: pass
+                # Also reset target position to ensure it doesn't try to go somewhere after landing
+                drone_controller._target_position = None
                 await drone_controller.drone.action.land()
                 print("Drone iniş yaptı.")
             elif command.startswith('goto '):
@@ -873,8 +887,11 @@ async def main():
                             "a": int(alt * 100) # Santimetre cinsinden gönder
                         }
                     )
-                    drone_controller.xbee_controller.send(gps_package) 
-                    print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
+                    if drone_controller.xbee_controller and drone_controller.xbee_controller.connected:
+                        drone_controller.xbee_controller.send(gps_package) 
+                        print(f"Manuel GPS paketi gönderildi: Lat={lat}, Lon={lon}, Alt={alt}")
+                    else:
+                        print("XBee bağlı değil, GPS paketi gönderilemedi.")
                     break
             elif command.startswith('run '):
                 parts = command.split()
