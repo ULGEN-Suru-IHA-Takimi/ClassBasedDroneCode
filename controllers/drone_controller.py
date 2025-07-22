@@ -43,7 +43,7 @@ class APF: # Artificial Potential Field (Yapay Potansiyel Alan)
         """
         if drone_id != self.drone_id: # Kendi konumumuzu takip etmiyoru
             self.other_drone_positions[drone_id] = (lat, lon, alt)
-            # print(f"APF: Drone {drone_id} konumu güncellendi: Lat={lat}, Lon={lon}, Alt={alt}")
+            # print(f"APF: Drone {drone_id} konumu güncellendi: Lat={latitude}, Lon={longitude}, Alt={altitude}")
 
     def calculate_avoidance_vector(self, current_lat, current_lon, current_alt):
         """
@@ -127,7 +127,7 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Number of confirmations expected for the mission
 
         # PID controllers (tuned values) - using simple-pid
-        # Horizontal PID: setpoint=0, input will be the error in meters
+        # Horizontal PID: setpoint will be dynamically updated to target_lat/lon
         self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) 
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         
@@ -426,16 +426,15 @@ class DroneController(DroneConnection):
                     target_alt = self._target_position.absolute_altitude_m
                     target_hed = self._target_position.yaw_deg # Target heading
 
-                    # Update setpoint for vertical PID
+                    # Update setpoints for PIDs
+                    self.pid_north.setpoint = target_lat
+                    self.pid_east.setpoint = target_lon
                     self.pid_down.setpoint = target_alt
                     
-                    # Horizontal PID inputs are errors in meters. setpoint for these PIDs is 0.
-                    error_north_m = (target_lat - current_lat) * lat_to_m
-                    error_east_m = (target_lon - current_lon) * lon_to_m
-
-                    vel_north_pid = self.pid_north(error_north_m) # Input is error in meters
-                    vel_east_pid = self.pid_east(error_east_m)   # Input is error in meters
-                    vel_down_pid = self.pid_down(current_alt)    # Input is current altitude, setpoint is target_alt
+                    # PID inputs are current values. PIDs calculate error = setpoint - current_value.
+                    vel_north_pid = self.pid_north(current_lat) # Input is current latitude
+                    vel_east_pid = self.pid_east(current_lon)   # Input is current longitude
+                    vel_down_pid = self.pid_down(current_alt)    # Input is current altitude
 
                     # Yaw control (simple P controller for heading)
                     # Calculate shortest angle difference
@@ -455,7 +454,7 @@ class DroneController(DroneConnection):
                     p_term_d, i_term_d, d_term_d = self.pid_down.components
                     print(f"  [DEBUG-Kontrol Döngüsü] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hed={current_yaw:.2f}deg, Hız D: {current_vel_down:.2f}m/s")
                     print(f"  [DEBUG-Kontrol Döngüsü] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m, Hed={target_hed:.2f}deg")
-                    print(f"  [DEBUG-Kontrol Döngüsü] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={target_alt - current_alt:.2f}, Yaw={yaw_error:.2f}deg") # Log actual errors
+                    print(f"  [DEBUG-Kontrol Döngüsü] Hata (m): N={(target_lat - current_lat) * lat_to_m:.2f}, E={(target_lon - current_lon) * lon_to_m:.2f}, D={target_alt - current_alt:.2f}, Yaw={yaw_error:.2f}deg") # Log actual errors
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (N-P, I, D): ({p_term_n:.2f}, {i_term_n:.2f}, {d_term_n:.2f})")
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (E-P, I, D): ({p_term_e:.2f}, {i_term_e:.2f}, {d_term_e:.2f})")
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (D-P, I, D): ({p_term_d:.2f}, {i_term_d:.2f}, {d_term_d:.2f})")
