@@ -570,7 +570,7 @@ class DroneController(DroneConnection):
         while time.time() - start_time < timeout:
             try:
                 position_info = await position_async_iterator.__anext__()
-                current_alt = position_info.absolute_altitude_m
+                current_alt = position_info.absolute_altitude_m * 10
                 
                 print(f"  [DEBUG-Havalanma Kontrolü] Mevcut İrtifa: {current_alt:.2f}m (Hedef: {target_altitude}m)")
 
