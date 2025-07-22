@@ -97,6 +97,14 @@ class DroneController(DroneConnection):
     """
     DRONE_ID = "1" # Bu dronun benzersiz ID'si
 
+    # Define TargetPosition dataclass at the class level
+    @dataclasses.dataclass
+    class TargetPosition:
+        latitude_deg: float
+        longitude_deg: float
+        absolute_altitude_m: float
+        yaw_deg: float # Added yaw_deg for target heading
+
     def __init__(self, sys_address: str = "udpin://0.0.0.0:14540", xbee_port: str = "/dev/ttyUSB0"):
         super().__init__(sys_address)
         print(f"[DroneController]: Initializing DroneController instance: {self}") # Debug output
@@ -119,6 +127,7 @@ class DroneController(DroneConnection):
         self.required_confirmations = 0 # Number of confirmations expected for the mission
 
         # PID controllers (tuned values) - using simple-pid
+        # Horizontal PID: setpoint=0, input will be the error in meters
         self.pid_north = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0)) 
         self.pid_east = PID(Kp=0.1, Ki=0.001, Kd=0.8, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))  
         
@@ -126,20 +135,13 @@ class DroneController(DroneConnection):
         # Kp, Ki, Kd values are negative because simple-pid's error = setpoint - current_value.
         # If current_alt < target_alt, error is positive (need to go UP). MAVSDK down_m_s for UP is negative.
         # So, positive error needs negative output. Hence, negative Kp.
+        # setpoint will be dynamically updated to target_alt
         self.pid_down = PID(Kp=-1.5, Ki=-0.005, Kd=-2.5, setpoint=0, sample_time=0.1, output_limits=(-5.0, 5.0))
 
         self.drone_speed = 5.0 # Target speed of the drone (m/s)
 
         # New: Target position for the continuous offboard control loop
-        # Using a dataclass for better structure and explicit fields including heading
-        @dataclasses.dataclass
-        class TargetPosition:
-            latitude_deg: float
-            longitude_deg: float
-            absolute_altitude_m: float
-            yaw_deg: float # Added yaw_deg for target heading
-        
-        self._target_position: TargetPosition | None = None # Initialize as None
+        self._target_position: self.TargetPosition | None = None # Initialize as None
         self._offboard_control_task = None # Task for continuous offboard control
 
 
@@ -389,8 +391,6 @@ class DroneController(DroneConnection):
         ALT_TOLERANCE_M = 0.5 # Altitude tolerance (meters)
         SPEED_TOLERANCE = 0.5 # Speed tolerance (m/s)
 
-        lat_to_m = 111320.0 # Approx 1 degree latitude ~ 111320 meters
-
         try:
             while not self._stop_tasks_event.is_set() and self._drone_armed_event.is_set():
                 try:
@@ -411,10 +411,14 @@ class DroneController(DroneConnection):
                 current_vel_east = current_velocity.east_m_s
                 current_vel_down = current_velocity.down_m_s
 
+                # Calculate conversion factors dynamically based on current latitude
+                lat_to_m = 111320.0
+                lon_to_m = 111320.0 * math.cos(math.radians(current_lat))
+
                 command_vel_north = 0.0
                 command_vel_east = 0.0
                 command_vel_down = 0.0
-                command_yaw_rate = 0.0 # Control yaw rate instead of absolute yaw
+                command_yaw_rate = 0.0
 
                 if self._target_position:
                     target_lat = self._target_position.latitude_deg
@@ -424,14 +428,14 @@ class DroneController(DroneConnection):
 
                     # Update setpoint for vertical PID
                     self.pid_down.setpoint = target_alt
-                    # Update setpoints for horizontal PIDs (they are already 0, but can be set to target_lat/lon if we want position PID)
-                    # For velocity control, setpoint is 0, input is error.
-                    # The setpoint for pid_north/east is 0, so input should be the error.
-                    # If error_north_m is positive (target is North), we want positive north velocity.
-                    # So Kp should be positive.
-                    vel_north_pid = self.pid_north(current_lat) # Input is current latitude, setpoint is target latitude
-                    vel_east_pid = self.pid_east(current_lon) # Input is current longitude, setpoint is target longitude
-                    vel_down_pid = self.pid_down(current_alt) # Input is current altitude, setpoint is target_alt
+                    
+                    # Horizontal PID inputs are errors in meters. setpoint for these PIDs is 0.
+                    error_north_m = (target_lat - current_lat) * lat_to_m
+                    error_east_m = (target_lon - current_lon) * lon_to_m
+
+                    vel_north_pid = self.pid_north(error_north_m) # Input is error in meters
+                    vel_east_pid = self.pid_east(error_east_m)   # Input is error in meters
+                    vel_down_pid = self.pid_down(current_alt)    # Input is current altitude, setpoint is target_alt
 
                     # Yaw control (simple P controller for heading)
                     # Calculate shortest angle difference
@@ -451,7 +455,7 @@ class DroneController(DroneConnection):
                     p_term_d, i_term_d, d_term_d = self.pid_down.components
                     print(f"  [DEBUG-Kontrol Döngüsü] Mevcut: Lat={current_lat:.6f}, Lon={current_lon:.6f}, Alt={current_alt:.2f}m, Hed={current_yaw:.2f}deg, Hız D: {current_vel_down:.2f}m/s")
                     print(f"  [DEBUG-Kontrol Döngüsü] Hedef: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt:.2f}m, Hed={target_hed:.2f}deg")
-                    print(f"  [DEBUG-Kontrol Döngüsü] Hata (m): N={(target_lat - current_lat) * lat_to_m:.2f}, E={(target_lon - current_lon) * lon_to_m:.2f}, D={target_alt - current_alt:.2f}, Yaw={yaw_error:.2f}deg") # Log actual errors
+                    print(f"  [DEBUG-Kontrol Döngüsü] Hata (m): N={error_north_m:.2f}, E={error_east_m:.2f}, D={target_alt - current_alt:.2f}, Yaw={yaw_error:.2f}deg") # Log actual errors
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (N-P, I, D): ({p_term_n:.2f}, {i_term_n:.2f}, {d_term_n:.2f})")
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (E-P, I, D): ({p_term_e:.2f}, {i_term_e:.2f}, {d_term_e:.2f})")
                     print(f"  [DEBUG-Kontrol Döngüsü] PID Bileşenleri (D-P, I, D): ({p_term_d:.2f}, {i_term_d:.2f}, {d_term_d:.2f})")
@@ -509,7 +513,7 @@ class DroneController(DroneConnection):
             # Stop offboard mode when the loop exits
             try:
                 await self.drone.offboard.stop()
-                print("[DroneController]: Offboard mode stopped.")
+                print("[DroneController]: Offboard modu durduruldu.")
             except offboard.OffboardError as error:
                 print(f"[DroneController]: Offboard mod durdurulamadı: {error}")
             self._target_position = None # Clear target position
@@ -521,15 +525,7 @@ class DroneController(DroneConnection):
         """
         print(f"[DroneController]: Hedef koordinat güncelleniyor: Lat={target_lat:.6f}, Lon={target_lon:.6f}, Alt={target_alt}m, Hed={target_hed} derece")
         
-        # Using the nested TargetPosition dataclass for _target_position
-        @dataclasses.dataclass
-        class TargetPosition:
-            latitude_deg: float
-            longitude_deg: float
-            absolute_altitude_m: float
-            yaw_deg: float
-
-        self._target_position = TargetPosition(target_lat, target_lon, target_alt, target_hed)
+        self._target_position = self.TargetPosition(target_lat, target_lon, target_alt, target_hed)
         
         # Ensure offboard control loop is running (it should be started by armed state monitor)
         if not self._offboard_control_task or self._offboard_control_task.done():
@@ -557,15 +553,7 @@ class DroneController(DroneConnection):
             current_pos_telemetry = await self.drone.telemetry.position().__anext__()
             current_heading_telemetry = await self.drone.telemetry.heading().__anext__()
             
-            # Use the nested TargetPosition dataclass
-            @dataclasses.dataclass
-            class TargetPosition:
-                latitude_deg: float
-                longitude_deg: float
-                absolute_altitude_m: float
-                yaw_deg: float
-            
-            self._target_position = TargetPosition(
+            self._target_position = self.TargetPosition(
                 current_pos_telemetry.latitude_deg,
                 current_pos_telemetry.longitude_deg,
                 target_altitude,
